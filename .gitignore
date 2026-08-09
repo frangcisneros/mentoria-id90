@@ -7,13 +7,23 @@ env/
 venv/
 ENV/
 .venv/
+.venv*/
 
-# Data files (too large for GitHub - see README for download instructions)
+# Data & database files (too large for GitHub)
+data/*.db
+data/*.sqlite
+data/*.sqlite3
+*.db
+*.sqlite
+*.sqlite3
+*.pkl
+*.pickle
 data/historicals_*.csv
 data/datos_historicos_*.csv
 data/price_historicals/*.csv
 outputs/
-
+TP1/outputs/
+*.backup
 
 # IDE
 .vscode/
