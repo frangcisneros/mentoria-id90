@@ -1,19 +1,64 @@
 # auxiliary_functions.py
-# Funciones auxiliares para el sistema de detección de deals
+# Funciones auxiliares para el sistema de detección de deals hoteleros
+# Implementa mejoras en mapeo jerárquico, cálculo robusto de baselines con fallbacks y estadísticas ponderadas.
 
 import pandas as pd
 import numpy as np
 from scipy import stats
 import glob
+import re
+import unicodedata
 from pathlib import Path
 import logging
 import config
 
 # Configurar logging
 logging.basicConfig(
-    level=logging.INFO,  # Optimizado: INFO en lugar de DEBUG
-    format='%(asctime)s - %(levelname)s - %(message)s'
+    level=config.LOG_LEVEL,
+    format=config.LOG_FORMAT
 )
+
+
+# ========================================
+# STRING NORMALIZATION & TEXT UTILITIES
+# ========================================
+
+def strip_accents(text):
+    """
+    Normaliza texto removiendo acentos/diacríticos, espacios extras y pasando a minúsculas.
+    
+    Args:
+        text (str): Texto de entrada
+        
+    Returns:
+        str: Texto normalizado en minúsculas y sin acentos
+    """
+    if pd.isna(text) or not isinstance(text, str):
+        return ""
+    # Descomposición canónica (NFD) y filtrado de marcas diacríticas
+    normalized = "".join(
+        c for c in unicodedata.normalize("NFD", text)
+        if unicodedata.category(c) != "Mn"
+    )
+    # Limpiar espacios múltiples y pasar a minúsculas
+    cleaned = re.sub(r"\s+", " ", normalized).strip().casefold()
+    return cleaned
+
+
+# Diccionario canónico de estados de EE.UU. (nombres completos -> códigos de 2 letras)
+US_STATE_CODES = {
+    'alabama': 'al', 'alaska': 'ak', 'arizona': 'az', 'arkansas': 'ar', 'california': 'ca',
+    'colorado': 'co', 'connecticut': 'ct', 'delaware': 'de', 'florida': 'fl', 'georgia': 'ga',
+    'hawaii': 'hi', 'idaho': 'id', 'illinois': 'il', 'indiana': 'in', 'iowa': 'ia',
+    'kansas': 'ks', 'kentucky': 'ky', 'louisiana': 'la', 'maine': 'me', 'maryland': 'md',
+    'massachusetts': 'ma', 'michigan': 'mi', 'minnesota': 'mn', 'mississippi': 'ms', 'missouri': 'mo',
+    'montana': 'mt', 'nebraska': 'ne', 'nevada': 'nv', 'new hampshire': 'nh', 'new jersey': 'nj',
+    'new mexico': 'nm', 'new york': 'ny', 'north carolina': 'nc', 'north dakota': 'nd', 'ohio': 'oh',
+    'oklahoma': 'ok', 'oregon': 'or', 'pennsylvania': 'pa', 'rhode island': 'ri', 'south carolina': 'sc',
+    'south dakota': 'sd', 'tennessee': 'tn', 'texas': 'tx', 'utah': 'ut', 'vermont': 'vt',
+    'virginia': 'va', 'washington': 'wa', 'west virginia': 'wv', 'wisconsin': 'wi', 'wyoming': 'wy',
+    'district of columbia': 'dc', 'puerto rico': 'pr', 'guam': 'gu', 'virgin islands': 'vi'
+}
 
 
 # ========================================
@@ -22,447 +67,252 @@ logging.basicConfig(
 
 def load_all_historicals(data_path=None):
     """
-    Loads all historical CSV files from the specified directory.
+    Carga todos los archivos históricos CSV desde el directorio especificado.
     
     Args:
-        data_path (Path, optional): Directory path (default: config.PRICE_HISTORICALS_DIR)
+        data_path (Path, optional): Ruta al directorio (default: config.PRICE_HISTORICALS_DIR)
     
     Returns:
-        pd.DataFrame: Combined DataFrame with all historical records
+        pd.DataFrame: DataFrame combinado con todos los registros históricos
     
     Raises:
-        FileNotFoundError: If no CSV files found in directory
+        FileNotFoundError: Si no se encuentran archivos CSV en el directorio
     """
     if data_path is None:
         data_path = config.PRICE_HISTORICALS_DIR
     
     data_path = Path(data_path)
     pattern = str(data_path / config.HISTORICALS_FILE_PATTERN)
-    files = glob.glob(pattern)
+    historical_files = [Path(f) for f in glob.glob(pattern)]
     
-    if not files:
-        raise FileNotFoundError(f"No files found in {data_path}")
+    if not historical_files:
+        raise FileNotFoundError(f"No se encontraron archivos en {data_path} con el patrón {config.HISTORICALS_FILE_PATTERN}")
     
-    logging.info(f"Loading {len(files)} historical files...")
+    logging.info(f"Cargando {len(historical_files)} archivos históricos...")
     
     dfs = []
-    for file in sorted(files):
-        df_temp = pd.read_csv(file)
-        df_temp['source_file'] = Path(file).name
+    for file in historical_files:
+        df_temp = pd.read_csv(
+            file,
+            dtype={'city': str, 'state': str, 'country': str, 'country_code': str},
+            low_memory=False
+        )
+        df_temp['source_file'] = file.name
         dfs.append(df_temp)
-        logging.debug(f"  ✓ {Path(file).name}: {len(df_temp):,} registros")
+        logging.info(f"  ✓ {file.name}: {len(df_temp):,} registros")
     
     df_combined = pd.concat(dfs, ignore_index=True)
-    logging.info(f"Total loaded: {len(df_combined):,} records")
+    logging.info(f"Total cargado: {len(df_combined):,} registros")
     
     return df_combined
 
 
 def load_destination_mapping(mapping_path=None):
     """
-    Loads the city-to-destination mapping file.
+    Carga el archivo de mapping de destinos geográficos.
     
     Args:
-        mapping_path: Path al CSV (default: config.DESTINATION_MAPPING_FILE)
-    
+        mapping_path: Ruta al archivo (usa config por defecto)
+        
     Returns:
-        DataFrame con mapping
+        pd.DataFrame con el mapping
     """
     if mapping_path is None:
         mapping_path = config.DESTINATION_MAPPING_FILE
     
-    if not Path(mapping_path).exists():
-        logging.warning(f"Mapping no encontrado: {mapping_path}")
-        return None
+    mapping_path = Path(mapping_path)
+    if not mapping_path.exists():
+        logging.warning(f"Archivo de mapping no encontrado: {mapping_path}")
+        return pd.DataFrame()
     
-    mapping_df = pd.read_csv(mapping_path)
+    mapping_df = pd.read_csv(
+        mapping_path,
+        dtype={'nearest_destination_id': str, 'city': str, 'state': str, 'country': str, 'country_code': str},
+        low_memory=False
+    )
     logging.info(f"Mapping cargado: {len(mapping_df):,} registros")
-    logging.debug(f"  Reducción: {mapping_df['city'].nunique()} → {mapping_df['nearest_destination_id'].nunique()} destinos")
+    logging.info(f"  Destinos canónicos únicos: {mapping_df['nearest_destination_id'].nunique():,}")
     
     return mapping_df
 
 
 def validate_data(df):
     """
-    Filtra registros con datos erróneos (denominador = 0).
-    Elimina registros donde: nights <= 0 OR rooms <= 0 OR (adults + kids) <= 0
+    Filtra registros inválidos y outliers extremos:
+    - Denominadores inválidos: nights <= 0, rooms <= 0, (adults + kids) <= 0
+    - Precios no válidos o extremos (<= 0 o > $50,000 por errores de scraping/monedas no USD)
     
-    Parameters:
-    -----------
-    df : pd.DataFrame
-        DataFrame con datos históricos
+    Args:
+        df (pd.DataFrame): DataFrame con datos históricos
         
     Returns:
-    --------
-    pd.DataFrame con registros válidos
+        pd.DataFrame: DataFrame filtrado con registros válidos
     """
     initial_count = len(df)
     
-    # Filtrar registros erróneos
-    valid_df = df[
+    # 1. Filtro de denominadores válidos
+    valid_mask = (
         (df['nights'] > 0) & 
         (df['number_of_rooms'] > 0) & 
         ((df['number_of_adults'] + df['number_of_kids']) > 0)
-    ].copy()
+    )
     
+    # 2. Filtro de precios válidos (si la columna existe)
+    if 'avg_price_average' in df.columns:
+        valid_mask = valid_mask & (df['avg_price_average'] > 0) & (df['avg_price_average'] <= 50000)
+    
+    valid_df = df[valid_mask].copy()
     removed_count = initial_count - len(valid_df)
     
     if removed_count > 0:
-        logging.warning(f"Registros eliminados por datos erróneos: {removed_count} ({100*removed_count/initial_count:.2f}%)")
-        logging.debug(f"  - nights <= 0: {len(df[df['nights'] <= 0])}")
-        logging.debug(f"  - rooms <= 0: {len(df[df['number_of_rooms'] <= 0])}")
-        logging.debug(f"  - (adults + kids) <= 0: {len(df[(df['number_of_adults'] + df['number_of_kids']) <= 0])}")
+        logging.warning(f"Registros eliminados por datos inválidos u outliers extremos: {removed_count:,} ({100*removed_count/initial_count:.2f}%)")
     else:
-        logging.info("✓ Todos los registros son válidos (sin denominadores = 0)")
+        logging.info("✓ Todos los registros son válidos")
     
     logging.info(f"Registros válidos: {len(valid_df):,} ({100*len(valid_df)/initial_count:.1f}%)")
     
     return valid_df
 
 
+# ========================================
+# HIERARCHICAL WATERFALL DESTINATION MAPPING
+# ========================================
+
 def apply_destination_mapping(df, mapping_df):
     """
-    Aplica mapping de destinaciones usando reference (country_code-state_code-city) + city.
+    Aplica mapping jerárquico en cascada (Waterfall Matching) para maximizar la cobertura:
+    1. Coincidencia exacta país + código de estado + ciudad (ej. 'US - FL - Orlando')
+    2. Coincidencia país + nombre completo de estado + ciudad (ej. 'US - Florida - Orlando')
+    3. Coincidencia país + ciudad (ej. 'DO - Bavaro', 'AR - Buenos Aires')
+    4. Coincidencia por tupla (país, ciudad) en el catálogo de ciudades
+    5. Fallback a ciudad cruda si no se encuentra en el mapping.
     
     Args:
         df: DataFrame con columnas 'country_code', 'state', 'city'
-        mapping_df: DataFrame con columnas 'reference', 'city', 'nearest_destination_id', 'nearest_destination_name'
-    
+        mapping_df: DataFrame con 'reference', 'city', 'nearest_destination_id', 'nearest_destination_name'
+        
     Returns:
-        DataFrame con 'destination_final' (ID) y 'destination_name' (nombre)
+        DataFrame con:
+        - 'nearest_destination_id', 'nearest_destination_name'
+        - 'destination_final', 'destination_name'
+        - 'is_mapped' (bool): True si mapeó a un destino canónico
     """
-    if mapping_df is None:
+    if mapping_df is None or len(mapping_df) == 0:
         logging.warning("No hay mapping disponible, usando 'city' como destino")
+        df = df.copy()
         df['destination_final'] = df['city']
         df['destination_name'] = df['city']
+        df['is_mapped'] = False
+        df['nearest_destination_id'] = np.nan
+        df['nearest_destination_name'] = np.nan
         return df
+
+    df = df.copy()
     
-    # Mapeo de nombres de estados a códigos
-    STATE_CODES = {
-        'Alabama': 'AL', 'Alaska': 'AK', 'Arizona': 'AZ', 'Arkansas': 'AR', 'California': 'CA',
-        'Colorado': 'CO', 'Connecticut': 'CT', 'Delaware': 'DE', 'Florida': 'FL', 'Georgia': 'GA',
-        'Hawaii': 'HI', 'Idaho': 'ID', 'Illinois': 'IL', 'Indiana': 'IN', 'Iowa': 'IA',
-        'Kansas': 'KS', 'Kentucky': 'KY', 'Louisiana': 'LA', 'Maine': 'ME', 'Maryland': 'MD',
-        'Massachusetts': 'MA', 'Michigan': 'MI', 'Minnesota': 'MN', 'Mississippi': 'MS', 'Missouri': 'MO',
-        'Montana': 'MT', 'Nebraska': 'NE', 'Nevada': 'NV', 'New Hampshire': 'NH', 'New Jersey': 'NJ',
-        'New Mexico': 'NM', 'New York': 'NY', 'North Carolina': 'NC', 'North Dakota': 'ND', 'Ohio': 'OH',
-        'Oklahoma': 'OK', 'Oregon': 'OR', 'Pennsylvania': 'PA', 'Rhode Island': 'RI', 'South Carolina': 'SC',
-        'South Dakota': 'SD', 'Tennessee': 'TN', 'Texas': 'TX', 'Utah': 'UT', 'Vermont': 'VT',
-        'Virginia': 'VA', 'Washington': 'WA', 'West Virginia': 'WV', 'Wisconsin': 'WI', 'Wyoming': 'WY'
-    }
+    # 1. Normalizar catálogo de mapping
+    map_clean = mapping_df.copy()
+    map_clean['ref_clean'] = map_clean['reference'].astype(str).apply(strip_accents)
+    map_clean['city_clean'] = map_clean['city'].astype(str).apply(strip_accents)
+    map_clean['country_clean'] = map_clean['ref_clean'].str.split(' - ').str[0].str.strip()
     
-    # Construir reference como 'country_code - state_code - city'
-    df['state_code'] = df['state'].map(STATE_CODES)
-    df['reference'] = df['country_code'] + ' - ' + df['state_code'].fillna('') + ' - ' + df['city']
+    # Diccionarios de búsqueda rápida
+    ref_to_id = map_clean.drop_duplicates('ref_clean').set_index('ref_clean')['nearest_destination_id'].to_dict()
+    ref_to_name = map_clean.drop_duplicates('ref_clean').set_index('ref_clean')['nearest_destination_name'].to_dict()
     
-    # Optimización: crear índice temporal en mapping para merge más rápido
-    mapping_indexed = mapping_df[['reference', 'city', 'nearest_destination_id', 'nearest_destination_name']].copy()
-    mapping_indexed = mapping_indexed.set_index(['reference', 'city'])
+    country_city_to_id = map_clean.drop_duplicates(['country_clean', 'city_clean']).set_index(['country_clean', 'city_clean'])['nearest_destination_id'].to_dict()
+    country_city_to_name = map_clean.drop_duplicates(['country_clean', 'city_clean']).set_index(['country_clean', 'city_clean'])['nearest_destination_name'].to_dict()
+
+    # 2. Extraer combinaciones geográficas únicas de los datos de entrada para optimizar performance
+    geo = df[['country_code', 'state', 'city']].drop_duplicates().copy()
+    geo['country_clean'] = geo['country_code'].astype(str).apply(strip_accents)
+    geo['state_clean'] = geo['state'].astype(str).apply(strip_accents)
+    geo['city_clean'] = geo['city'].astype(str).apply(strip_accents)
     
-    # Merge por 'reference' + 'city' con índice (más rápido)
-    df = df.merge(
-        mapping_indexed,
-        left_on=['reference', 'city'],
-        right_index=True,
-        how='left',
-        copy=False
-    )
+    # Mapear estado a código de 2 letras (ej. 'Florida' -> 'fl')
+    geo['state_code'] = geo['state_clean'].map(US_STATE_CODES).fillna(geo['state_clean'])
+
+    # Construir claves de búsqueda
+    k_state_code = geo['country_clean'] + ' - ' + geo['state_code'] + ' - ' + geo['city_clean']
+    k_state_name = geo['country_clean'] + ' - ' + geo['state_clean'] + ' - ' + geo['city_clean']
+    k_country_city = geo['country_clean'] + ' - ' + geo['city_clean']
+
+    # Cascada de matching:
+    # Nivel 1: país - código de estado - ciudad
+    m_id = k_state_code.map(ref_to_id)
+    m_name = k_state_code.map(ref_to_name)
+
+    # Nivel 2: país - nombre de estado - ciudad
+    m_id = m_id.combine_first(k_state_name.map(ref_to_id))
+    m_name = m_name.combine_first(k_state_name.map(ref_to_name))
+
+    # Nivel 3: país - ciudad
+    m_id = m_id.combine_first(k_country_city.map(ref_to_id))
+    m_name = m_name.combine_first(k_country_city.map(ref_to_name))
+
+    # Nivel 4: Tupla (país, ciudad) en catálogo
+    cc_idx = pd.MultiIndex.from_arrays([geo['country_clean'], geo['city_clean']])
+    m_id = m_id.combine_first(pd.Series(cc_idx.map(country_city_to_id), index=geo.index))
+    m_name = m_name.combine_first(pd.Series(cc_idx.map(country_city_to_name), index=geo.index))
+
+    geo['nearest_destination_id'] = m_id
+    geo['nearest_destination_name'] = m_name
+
+    # 3. Merge eficiente de vuelta al DataFrame principal
+    geo_mapping = geo[['country_code', 'state', 'city', 'nearest_destination_id', 'nearest_destination_name']]
     
-    # Usar nearest_destination_id como destination_final (clave interna)
-    # Usar nearest_destination_name para display
+    # Limpiar columnas previas si existían
+    cols_to_drop = [c for c in ['nearest_destination_id', 'nearest_destination_name', 'destination_final', 'destination_name', 'is_mapped'] if c in df.columns]
+    if cols_to_drop:
+        df = df.drop(columns=cols_to_drop)
+
+    df = df.merge(geo_mapping, on=['country_code', 'state', 'city'], how='left')
+
+    # Flag real de mapeo
+    df['is_mapped'] = df['nearest_destination_id'].notna()
+
+    # Asignar destination_final y destination_name (con fallback limpio a city)
     df['destination_final'] = df['nearest_destination_id'].fillna(df['city'])
     df['destination_name'] = df['nearest_destination_name'].fillna(df['city'])
-    
-    matched = df['nearest_destination_id'].notna().sum()
+
+    matched = int(df['is_mapped'].sum())
     total = len(df)
+    pct = (matched / total * 100) if total > 0 else 0
     
-    logging.info(f"Mapping aplicado: {matched:,}/{total:,} registros ({100*matched/total:.1f}%)")
-    logging.info(f"Destinos únicos: {df['destination_final'].nunique():,}")
-    
+    logging.info(f"✓ Mapping jerárquico aplicado: {matched:,}/{total:,} registros ({pct:.1f}%)")
+    logging.info(f"  Destinos únicos finales: {df['destination_final'].nunique():,}")
+
     return df
 
 
-def evaluate_hotel_price(destination_final, month, week_in_month, price_std, baselines_df):
-    """
-    Evalúa un precio contra los baselines y clasifica.
-    
-    Args:
-        destination_final: Destino
-        month: Mes (1-12)
-        week_in_month: Semana del mes (1-4)
-        price_std: Precio estandarizado
-        baselines_df: DataFrame de baselines
-    
-    Returns:
-        dict con classification, z_score, baseline_info
-    """
-    # Buscar baseline
-    baseline_row = baselines_df[
-        (baselines_df['destination_final'] == destination_final) &
-        (baselines_df['month'] == month) &
-        (baselines_df['week_in_month'] == week_in_month)
-    ]
-    
-    if baseline_row.empty:
-        return {
-            'classification': 'Insufficient Data',
-            'z_score': None,
-            'baseline_info': None,
-            'confidence': 'low'
-        }
-    
-    baseline = baseline_row.iloc[0]
-    
-    # Calcular z-score
-    if baseline['std_price_std'] == 0 or pd.isna(baseline['std_price_std']):
-        z_score = 0.0
-    else:
-        z_score = (price_std - baseline['mean_price_std']) / baseline['std_price_std']
-    
-    # Clasificar
-    classification = classify_deal(z_score)
-    
-    # Confianza
-    confidence = 'low' if baseline.get('low_confidence', False) else 'high'
-    
-    return {
-        'classification': classification,
-        'z_score': z_score,
-        'baseline_info': {
-            'mean': baseline['mean_price_std'],
-            'std': baseline['std_price_std'],
-            'count': baseline.get('count_obs', 0)
-        },
-        'confidence': confidence
-    }
-
-
-def evaluate_hotel_with_bucket_classification(destination_final, month, week_in_month, 
-                                               price_std, baselines_df, price_dist_df=None,
-                                               enable_buckets=None):
-    """
-    Evaluates hotel price using bucket-aware classification for fair market comparison.
-    
-    This function implements a 6-step process:
-    1. Determines the hotel's price bucket based on destination percentiles
-    2. Searches for bucket-specific baseline (destination + month + week + bucket)
-    3. Falls back to general baseline if bucket-specific data unavailable
-    4. Calculates z-score: (price - mean) / std
-    5. Classifies deal quality based on z-score thresholds
-    6. Returns comprehensive result with confidence indicators
-    
-    Args:
-        destination_final (str): Internal destination ID (e.g., 'US-NV-Las Vegas')
-        month (int): Month of check-in (1-12)
-        week_in_month (int): Week within month (1-4)
-        price_std (float): Standardized price ($/room-night-person)
-        baselines_df (pd.DataFrame): DataFrame with historical baselines
-        price_dist_df (pd.DataFrame, optional): Destination percentiles (required for buckets)
-        enable_buckets (bool, optional): Enable bucket classification (default: config.ENABLE_PRICE_BUCKETS)
-    
-    Returns:
-        dict: {
-            'classification': str - Deal category ('Deal', 'Good Price', 'Normal Price', 'Expensive', 'Insufficient Data')
-            'is_deal': bool - True if z-score < -1.0
-            'z_score': float - Statistical score vs market (negative = below average)
-            'price_bucket': str - Hotel category ('low'=Budget, 'medium'=Mid-Range, 'high'=Premium)
-            'relative_price_index': float - price_std / market_median (e.g., 0.8 = 20% below median)
-            'baseline_info': dict - Market statistics {'mean': float, 'std': float, 'count': int, 'bucket': str}
-            'market_percentiles': dict - {'p25': float, 'p50': float, 'p75': float}
-            'confidence': str - 'low', 'medium', or 'high' based on data quality
-            'used_fallback': bool - True if bucket-specific baseline unavailable
-            'message': str - Optional error/warning message
-        }
-    
-    Examples:
-        >>> result = evaluate_hotel_with_bucket_classification(
-        ...     destination_final='US-NV-Las Vegas',
-        ...     month=6, week_in_month=2,
-        ...     price_std=45.0,
-        ...     baselines_df=baselines,
-        ...     price_dist_df=price_dist,
-        ...     enable_buckets=True
-        ... )
-        >>> result['classification']
-        'Deal'
-        >>> result['price_bucket']
-        'medium'
-        >>> result['z_score']
-        -1.25
-    
-    Notes:
-        - Confidence degrades to 'medium' when using fallback baseline
-        - Std deviation uses 10% of mean as fallback when std=0
-        - Requires price_dist_df when enable_buckets=True
-        - Falls back to non-bucket evaluation if price_dist_df is None
-    """
-    if enable_buckets is None:
-        enable_buckets = config.ENABLE_PRICE_BUCKETS
-    
-    # Si buckets no están habilitados, usar función original
-    if not enable_buckets or price_dist_df is None:
-        result = evaluate_hotel_price(destination_final, month, week_in_month, price_std, baselines_df)
-        result['is_deal'] = is_deal(result['z_score'])
-        result['price_bucket'] = None
-        result['relative_price_index'] = None
-        result['market_percentiles'] = None
-        result['used_fallback'] = False
-        return result
-    
-    # PASO 1: Determinar bucket del hotel
-    dest_dist = price_dist_df[price_dist_df['destination_final'] == destination_final]
-    
-    if dest_dist.empty:
-        return {
-            'classification': 'Insufficient Data',
-            'is_deal': False,
-            'z_score': None,
-            'price_bucket': None,
-            'relative_price_index': None,
-            'market_percentiles': None,
-            'baseline_info': None,
-            'confidence': 'low',
-            'used_fallback': False,
-            'message': f'No price distribution available for destination {destination_final}'
-        }
-    
-    dist = dest_dist.iloc[0]
-    p25 = dist['p25']
-    p50 = dist['p50']
-    p75 = dist['p75']
-    
-    # Clasificar en bucket
-    if price_std <= p25:
-        price_bucket = 'low'
-    elif price_std < p75:
-        price_bucket = 'medium'
-    else:
-        price_bucket = 'high'
-    
-    logging.debug(f"Hotel classified into '{price_bucket}' bucket (price={price_std:.2f}, p25={p25:.2f}, p75={p75:.2f})")
-    
-    # STEP 2: Search for bucket-specific baseline
-    baseline_row = baselines_df[
-        (baselines_df['destination_final'] == destination_final) &
-        (baselines_df['month'] == month) &
-        (baselines_df['week_in_month'] == week_in_month) &
-        (baselines_df['price_bucket'] == price_bucket)
-    ]
-    
-    # Fallback: if no baseline for this bucket, use general baseline
-    if baseline_row.empty:
-        logging.warning(f"No baseline for bucket '{price_bucket}', using fallback...")
-        baseline_row = baselines_df[
-            (baselines_df['destination_final'] == destination_final) &
-            (baselines_df['month'] == month) &
-            (baselines_df['week_in_month'] == week_in_month)
-        ]
-        used_fallback = True
-    else:
-        used_fallback = False
-    
-    # If still no baseline, return insufficient data
-    if baseline_row.empty:
-        return {
-            'classification': 'Insufficient Data',
-            'is_deal': False,
-            'z_score': None,
-            'price_bucket': price_bucket,
-            'relative_price_index': None,
-            'market_percentiles': {'p25': p25, 'p50': p50, 'p75': p75},
-            'baseline_info': None,
-            'confidence': 'low',
-            'used_fallback': used_fallback,
-            'message': f'No baseline available for destination {destination_final}, month {month}, week {week_in_month}'
-        }
-    
-    baseline = baseline_row.iloc[0]
-    
-    # PASO 3: Calcular z-score
-    mean = baseline['mean_price_std']
-    std = baseline['std_price_std']
-    
-    if std == 0 or pd.isna(std):
-        std = mean * 0.10  # Fallback: 10% del mean
-    
-    z_score = (price_std - mean) / std
-    
-    # PASO 4: Clasificar
-    classification = classify_deal(z_score)
-    is_deal_flag = is_deal(z_score)
-    
-    # PASO 5: Confianza
-    if baseline.get('low_confidence', False):
-        confidence = 'low'
-    elif used_fallback:
-        confidence = 'medium'
-    else:
-        confidence = 'high'
-    
-    # PASO 6: Relative Price Index
-    relative_price_index = (price_std / p50) if p50 > 0 else None
-    
-    # PASO 7: Construir respuesta
-    return {
-        'classification': classification,
-        'is_deal': is_deal_flag,
-        'z_score': z_score,
-        'price_bucket': price_bucket,
-        'relative_price_index': relative_price_index,
-        'baseline_info': {
-            'mean': mean,
-            'std': std,
-            'count': baseline.get('count_obs', 0),
-            'bucket': baseline.get('price_bucket', 'mixed')
-        },
-        'market_percentiles': {
-            'p25': p25,
-            'p50': p50,
-            'p75': p75
-        },
-        'confidence': confidence,
-        'used_fallback': used_fallback,
-        'message': f"Hotel {price_bucket} comparado contra baseline de su categoría"
-    }
+# Alias para retrocompatibilidad
+apply_destination_mapping_REVISADO = apply_destination_mapping
 
 
 # ========================================
-# STANDARDIZATION
+# PRICE STANDARDIZATION
 # ========================================
 
 def calculate_price_std(row, col_name):
     """
-    Calculates standardized price per unit (price per room-night-person).
-    
-    Formula: price_std = price_raw / (nights * rooms * (adults + kids))
-    
-    Economic Interpretation:
-    - Price for 1 night, 1 room, 1 person
-    - Enables comparison across searches with different configurations
-    - If adults + kids = 0, uses 1 as fallback (adults always >= 1)
+    Calcula precio estandarizado para una fila.
+    Fórmula: price / (nights * rooms * (adults + kids))
     
     Args:
-        row (pd.Series): DataFrame row
-        col_name (str): Column name to standardize
-    
+        row: pd.Series con nights, number_of_rooms, number_of_adults, number_of_kids
+        col_name: Nombre de la columna de precio
+        
     Returns:
-        float: Standardized price (price per room-night-person)
-    
-    Example:
-        >>> row = {'nights': 3, 'number_of_rooms': 2, 'number_of_adults': 2, 
-        ...        'number_of_kids': 1, 'avg_price_average': 450}
-        >>> calculate_price_std(row, 'avg_price_average')
-        25.0  # 450 / (3 * 2 * 3)
+        float: Precio estandarizado
     """
     rules = config.STANDARDIZATION_RULES
     
-    nights = row['nights'] if row['nights'] > rules['nights']['threshold'] else rules['nights']['fallback']
-    rooms = row['number_of_rooms'] if row['number_of_rooms'] > rules['number_of_rooms']['threshold'] else rules['number_of_rooms']['fallback']
-    adults = row['number_of_adults'] if row['number_of_adults'] > rules['number_of_adults']['threshold'] else rules['number_of_adults']['fallback']
-    kids = row['number_of_kids']
+    nights = row['nights'] if row['nights'] >= rules['nights']['threshold'] else rules['nights']['fallback']
+    rooms = row['number_of_rooms'] if row['number_of_rooms'] >= rules['number_of_rooms']['threshold'] else rules['number_of_rooms']['fallback']
+    adults = row['number_of_adults'] if row['number_of_adults'] >= rules['number_of_adults']['threshold'] else rules['number_of_adults']['fallback']
+    kids = row.get('number_of_kids', 0)
+    if pd.isna(kids):
+        kids = 0
     
-    # Nueva fórmula: producto en lugar de suma
-    # nights * rooms * (adults + kids)
     total_persons = adults + kids
     if total_persons == 0:
         total_persons = 1
@@ -471,59 +321,50 @@ def calculate_price_std(row, col_name):
     if denominator == 0:
         denominator = 1
     
-    price_std = row[col_name] / denominator
-    
-    return price_std
+    return float(row[col_name]) / denominator
+
+
+# Alias requerido por test_system.py
+calcular_total_std = calculate_price_std
 
 
 def standardize_prices(df):
     """
-    Aplica estandarización a columnas de precio.
-    Versión optimizada: operaciones vectorizadas en lugar de apply row-by-row.
+    Aplica estandarización vectorizada a las columnas de precio.
     
     Args:
-        df: DataFrame con precios crudos
-    
+        df: DataFrame con columnas crudas de precio
+        
     Returns:
         DataFrame con columnas *_std
     """
     df = df.copy()
-    
-    # Operaciones vectorizadas (mucho más rápido que apply)
     rules = config.STANDARDIZATION_RULES
     
-    nights = df['nights'].where(df['nights'] > rules['nights']['threshold'], rules['nights']['fallback'])
-    rooms = df['number_of_rooms'].where(df['number_of_rooms'] > rules['number_of_rooms']['threshold'], rules['number_of_rooms']['fallback'])
-    adults = df['number_of_adults'].where(df['number_of_adults'] > rules['number_of_adults']['threshold'], rules['number_of_adults']['fallback'])
+    nights = df['nights'].where(df['nights'] >= rules['nights']['threshold'], rules['nights']['fallback'])
+    rooms = df['number_of_rooms'].where(df['number_of_rooms'] >= rules['number_of_rooms']['threshold'], rules['number_of_rooms']['fallback'])
+    adults = df['number_of_adults'].where(df['number_of_adults'] >= rules['number_of_adults']['threshold'], rules['number_of_adults']['fallback'])
     kids = df['number_of_kids'].fillna(0)
     
     total_persons = (adults + kids).replace(0, 1)
     denominator = (nights * rooms * total_persons).replace(0, 1)
     
-    # Calcular todas las columnas a la vez
-    df['avg_price_average_std'] = df['avg_price_average'] / denominator
-    df['max_price_high_std'] = df['max_price_high'] / denominator
-    df['min_price_low_std'] = df['min_price_low'] / denominator
-    
+    if 'avg_price_average' in df.columns:
+        df['avg_price_average_std'] = df['avg_price_average'] / denominator
+    if 'max_price_high' in df.columns:
+        df['max_price_high_std'] = df['max_price_high'] / denominator
+    if 'min_price_low' in df.columns:
+        df['min_price_low_std'] = df['min_price_low'] / denominator
+        
     logging.info(f"✓ Precios estandarizados: {len(df):,} registros")
-    
     return df
 
 
 def calculate_price_std_from_params(price_raw, nights, number_of_rooms, number_of_adults, number_of_kids):
     """
-    Calcula precio estandarizado desde parámetros individuales.
-    Formula: price / (nights * rooms * (adults + kids))
-    Útil para la app.
-    
-    Args:
-        price_raw: Precio total
-        nights, number_of_rooms, number_of_adults, number_of_kids: Parámetros
-    
-    Returns:
-        float: Precio estandarizado (precio por room-night-person)
+    Calcula precio estandarizado a partir de parámetros individuales.
+    Útil para la interfaz de usuario de Streamlit.
     """
-    # Cálculo optimizado sin logging por performance
     pseudo_row = pd.Series({
         'nights': nights,
         'number_of_rooms': number_of_rooms,
@@ -531,27 +372,15 @@ def calculate_price_std_from_params(price_raw, nights, number_of_rooms, number_o
         'number_of_kids': number_of_kids,
         'price': price_raw
     })
-    
     return calculate_price_std(pseudo_row, 'price')
 
 
 # ========================================
-# TEMPORAL EXPANSION
+# TEMPORAL EXPANSION & FEATURES
 # ========================================
 
 def expand_dates_single_row(row):
-    """
-    Expands date range into daily observations.
-    
-    Converts a single row with date_start/date_end into multiple rows,
-    one for each day in the range.
-    
-    Args:
-        row (pd.Series): Row with 'date_start' and 'date_end' columns
-    
-    Returns:
-        pd.DataFrame: DataFrame with one row per day in the date range
-    """
+    """Expande una fila a observaciones diarias."""
     rango_fechas = pd.date_range(start=row['date_start'], end=row['date_end'])
     temp_df = pd.DataFrame([row] * len(rango_fechas))
     temp_df['date'] = rango_fechas
@@ -560,73 +389,48 @@ def expand_dates_single_row(row):
 
 def expand_dates_dataframe(df):
     """
-    Aplica expansión temporal a todo el DataFrame.
-    Versión ULTRA-OPTIMIZADA: usa numpy en lugar de iterrows (1000x más rápido).
-    
-    Args:
-        df: DataFrame con 'date_start' y 'date_end'
-    
-    Returns:
-        DataFrame expandido con columna 'date'
+    Aplica expansión temporal vectorizada ultrarrápida a todo el DataFrame.
     """
     df = df.copy()
     df['date_start'] = pd.to_datetime(df['date_start'])
     df['date_end'] = pd.to_datetime(df['date_end'])
     
-    logging.info(f"Expandiendo {len(df):,} registros a días (versión optimizada)...")
+    logging.info(f"Expandiendo {len(df):,} registros a días...")
     
-    # Calcular número de días por registro
     df['n_days'] = (df['date_end'] - df['date_start']).dt.days + 1
+    # Asegurar al menos 1 día
+    df['n_days'] = df['n_days'].clip(lower=1)
     
-    # Crear índices repetidos
     repeat_counts = df['n_days'].values
     expanded_indices = np.repeat(df.index.values, repeat_counts)
     
-    # Expandir DataFrame completo de una vez
     df_expanded = df.loc[expanded_indices].copy()
-    
-    # Calcular offsets de días para cada registro
     offsets = np.concatenate([np.arange(n) for n in repeat_counts])
     
-    # Asignar fechas expandidas
     df_expanded['date'] = df_expanded['date_start'].values + pd.to_timedelta(offsets, unit='D')
-    
-    # Limpiar columna temporal
     df_expanded = df_expanded.drop(columns=['n_days'])
     
     logging.info(f"✓ Expansión: {len(df):,} → {len(df_expanded):,} observaciones diarias")
-    
     return df_expanded
 
 
-# ========================================
-# FEATURE ENGINEERING
-# ========================================
-
 def get_week_in_month(day):
-    """Retorna semana del mes (1-4)."""
+    """Retorna la semana del mes (1-4)."""
     return config.get_week_in_month(day)
 
 
 def add_temporal_features(df, date_column='date'):
     """
-    Agrega features temporales.
-    Versión optimizada: usa numpy para cálculo de semana.
-    
-    Args:
-        df: DataFrame con columna de fecha
-        date_column: Nombre de columna de fecha
-    
-    Returns:
-        DataFrame con month, week_in_month
+    Agrega features temporales (month, week_in_month, day_of_week, dow).
     """
     df = df.copy()
     df[date_column] = pd.to_datetime(df[date_column])
     
     df['month'] = df[date_column].dt.month
     df['day_of_month'] = df[date_column].dt.day
+    df['day_of_week'] = df[date_column].dt.day_name()
+    df['dow'] = df[date_column].dt.dayofweek
     
-    # Vectorizar cálculo de semana del mes (más rápido que apply)
     days = df['day_of_month'].values
     week_in_month = np.ones(len(days), dtype=int)
     week_in_month[(days >= 8) & (days <= 15)] = 2
@@ -635,122 +439,206 @@ def add_temporal_features(df, date_column='date'):
     
     df['week_in_month'] = week_in_month
     
-    logging.info(f"Features temporales generadas: month, week_in_month")
-    
+    logging.info("✓ Features temporales generadas: month, week_in_month, dow")
     return df
 
 
 # ========================================
-# BASELINE CALCULATION
+# PRICE DISTRIBUTION & BUCKETS
+# ========================================
+
+def calculate_price_distribution_by_destination(df):
+    """
+    Calcula distribución de precios estandarizados y percentiles por destino.
+    """
+    logging.info("=" * 60)
+    logging.info("CALCULANDO DISTRIBUCIÓN DE PRECIOS POR DESTINO")
+    logging.info("=" * 60)
+    
+    if 'avg_price_average_std' not in df.columns:
+        raise ValueError("Falta columna 'avg_price_average_std'. Ejecutar standardize_prices primero.")
+    
+    # Filtrar precios válidos y no outliers
+    valid_df = df[
+        (df['avg_price_average_std'].notna()) & 
+        (df['avg_price_average_std'] > 0) & 
+        (df['avg_price_average_std'] < 2000)
+    ]
+    
+    grouped = valid_df.groupby(['destination_final', 'destination_name'])['avg_price_average_std']
+    
+    price_dist = grouped.agg(
+        n_observations='count',
+        min_price='min',
+        mean_price='mean',
+        max_price='max'
+    ).reset_index()
+    
+    percentiles_df = grouped.quantile([0.10, 0.25, 0.50, 0.75, 0.90]).unstack()
+    percentiles_df.columns = ['p10', 'p25', 'p50', 'p75', 'p90']
+    percentiles_df = percentiles_df.reset_index()
+    
+    price_dist = price_dist.merge(percentiles_df, on=['destination_final', 'destination_name'])
+    
+    logging.info(f"✓ Distribuciones calculadas para {len(price_dist):,} destinos")
+    return price_dist
+
+
+def classify_observations_into_buckets(df, price_dist):
+    """
+    Clasifica observaciones en buckets de precio ('low'=Budget, 'medium'=Mid-Range, 'high'=Premium).
+    """
+    logging.info("=" * 60)
+    logging.info("CLASIFICANDO OBSERVACIONES EN BUCKETS")
+    logging.info("=" * 60)
+    
+    df = df.merge(
+        price_dist[['destination_final', 'p25', 'p50', 'p75']],
+        on='destination_final',
+        how='left'
+    )
+    
+    price = df['avg_price_average_std'].values
+    p25 = df['p25'].values
+    p75 = df['p75'].values
+    p50 = df['p50'].values
+    
+    bucket = np.full(len(df), 'medium', dtype='object')
+    valid = ~(np.isnan(price) | np.isnan(p25) | np.isnan(p75))
+    bucket[valid & (price <= p25)] = 'low'
+    bucket[valid & (price >= p75)] = 'high'
+    bucket[~valid] = np.nan
+    
+    df['price_bucket'] = bucket
+    df['relative_price_index'] = np.where(p50 > 0, price / p50, np.nan)
+    df.drop(columns=['p25', 'p50', 'p75'], inplace=True)
+    
+    df_filtered = df[df['price_bucket'].notna()].copy()
+    logging.info(f"✓ Clasificación completada: {len(df_filtered):,} observaciones con bucket asignado")
+    
+    return df_filtered
+
+
+def generate_bucket_summary(baselines):
+    """Genera resumen estadístico de cobertura de buckets."""
+    if 'price_bucket' not in baselines.columns:
+        return None
+    
+    summary = baselines.groupby(['destination_final', 'destination_name', 'price_bucket']).agg(
+        n_contexts=('mean_price_std', 'count'),
+        total_observations=('count_obs', 'sum'),
+        avg_observations_per_context=('count_obs', 'mean'),
+        high_confidence_pct=('low_confidence', lambda x: (~x).sum() / len(x) * 100 if len(x) > 0 else 0)
+    ).reset_index()
+    
+    return summary
+
+
+# ========================================
+# ROBUST BASELINES WITH WEIGHTED STATISTICS
 # ========================================
 
 def media_ponderada(grupo_col, grupo_weight):
-    """
-    Calcula media ponderada por demanda (count_repeated).
-    Versión optimizada que recibe Series directamente.
-    
-    Args:
-        grupo_col: Series con valores a ponderar
-        grupo_weight: Series con pesos (count_repeated)
-    
-    Returns:
-        float: Media ponderada
-    """
+    """Calcula media ponderada por demanda."""
     total_ponderado = (grupo_col * grupo_weight).sum()
     total_peso = grupo_weight.sum()
-    
     return total_ponderado / total_peso if total_peso > 0 else np.nan
 
 
 def calculate_baselines(df, group_by_cols=None, enable_buckets=None):
     """
-    Calcula baselines históricos por contexto (opcionalmente con buckets).
+    Calcula baselines históricos por contexto aplicando media y desvío estándar ponderados.
     
     Args:
-        df: DataFrame expandido y estandarizado
-        group_by_cols: Columnas de agrupación (opcional, sobrescribe enable_buckets)
-        enable_buckets: Si True, incluye price_bucket en agrupación (default: config.ENABLE_PRICE_BUCKETS)
-    
+        df: DataFrame estandarizado y expandido
+        group_by_cols: Columnas de contexto
+        enable_buckets: Si True, incluye price_bucket
+        
     Returns:
-        DataFrame con baselines
+        DataFrame con baselines estadísticos
     """
-    # Determinar columnas de agrupación
     if group_by_cols is None:
         if enable_buckets is None:
             enable_buckets = config.ENABLE_PRICE_BUCKETS
         
-        if enable_buckets:
-            if 'price_bucket' not in df.columns:
-                raise ValueError("enable_buckets=True pero falta columna 'price_bucket'")
+        if enable_buckets and 'price_bucket' in df.columns:
             group_by_cols = ['destination_final', 'month', 'week_in_month', 'price_bucket']
         else:
             group_by_cols = ['destination_final', 'month', 'week_in_month']
     
     logging.info("=" * 60)
-    logging.info("CALCULANDO BASELINES")
+    logging.info(f"CALCULANDO BASELINES (Agrupación: {group_by_cols})")
     logging.info("=" * 60)
-    logging.info(f"Agrupación por: {group_by_cols}")
     
-    # Optimización: hacer el groupby una sola vez y usar operaciones vectorizadas
+    # Preparar columnas
+    df = df.copy()
+    if 'count_repeated' not in df.columns:
+        df['count_repeated'] = 1
+    else:
+        df['count_repeated'] = df['count_repeated'].fillna(1).clip(lower=1)
+        
+    if 'min_price_low_std' not in df.columns:
+        df['min_price_low_std'] = df['avg_price_average_std']
+    if 'max_price_high_std' not in df.columns:
+        df['max_price_high_std'] = df['avg_price_average_std']
+
+    # Precalcular ponderadores para cálculo vectorizado instantáneo
+    df['wx'] = df['count_repeated'] * df['avg_price_average_std']
+    df['wx2'] = df['count_repeated'] * (df['avg_price_average_std'] ** 2)
+
+    # Agregación básica vectorizada
     grouped = df.groupby(group_by_cols, dropna=False)
     
-    # Calcular operaciones sencillas primero
-    baselines = grouped.agg({
-        'avg_price_average_std': ['std', 'count'],
+    agg_dict = {
+        'destination_name': 'first',
         'min_price_low_std': 'min',
         'max_price_high_std': 'max',
         'count_repeated': 'sum',
-        'destination_name': 'first'
-    }).reset_index()
+        'wx': 'sum',
+        'wx2': 'sum',
+        'avg_price_average_std': 'count'  # conteo de filas
+    }
     
-    # Aplanar columnas multinivel
-    baselines.columns = list(group_by_cols) + ['std_price_std', 'price_count', 'min_price_std', 'max_price_std', 'count_obs', 'destination_name']
+    baselines = grouped.agg(agg_dict).reset_index()
     
-    # Calcular media ponderada de forma optimizada
-    # En lugar de llamar media_ponderada por cada grupo, calculamos directamente
-    weighted_means = []
-    for name, group in grouped:
-        weighted_mean = (group['avg_price_average_std'] * group['count_repeated']).sum() / group['count_repeated'].sum()
-        weighted_means.append(weighted_mean)
+    # Cálculo vectorizado instantáneo de media y desvío ponderados
+    w_sum = baselines['count_repeated'].values
+    sum_wx = baselines['wx'].values
+    sum_wx2 = baselines['wx2'].values
     
-    baselines['mean_price_std'] = weighted_means
+    mean_w = np.where(w_sum > 0, sum_wx / w_sum, np.nan)
+    var_w = np.where(w_sum > 0, (sum_wx2 / w_sum) - (mean_w ** 2), np.nan)
+    std_w = np.sqrt(np.maximum(var_w, 0.0))
     
-    # Reordenar columnas
-    baselines = baselines[list(group_by_cols) + ['mean_price_std', 'std_price_std', 'min_price_std', 'max_price_std', 'count_obs', 'destination_name']]
+    baselines['mean_price_std'] = mean_w
+    baselines['std_price_std'] = std_w
+    
+    baselines.rename(columns={
+        'min_price_low_std': 'min_price_std',
+        'max_price_high_std': 'max_price_std',
+        'count_repeated': 'count_obs',
+        'avg_price_average_std': 'count_records'
+    }, inplace=True)
+    baselines.drop(columns=['wx', 'wx2'], inplace=True)
     
     logging.info(f"✓ Baselines calculados: {len(baselines):,} contextos")
-    logging.info(f"  Destinos únicos: {baselines['destination_final'].nunique()}")
-    logging.info(f"  Meses cubiertos: {sorted(baselines['month'].unique())}")
-    
-    if 'price_bucket' in baselines.columns:
-        logging.info(f"  Buckets cubiertos: {sorted(baselines['price_bucket'].unique())}")
-        logging.info(f"  Distribución de contextos por bucket:")
-        for bucket in ['low', 'medium', 'high']:
-            count = len(baselines[baselines['price_bucket'] == bucket])
-            pct = (count / len(baselines) * 100) if len(baselines) > 0 else 0
-            logging.info(f"    {bucket:8s}: {count:5,} contextos ({pct:5.1f}%)")
+    logging.info(f"  Destinos únicos: {baselines['destination_final'].nunique():,}")
     
     return baselines
 
 
 def apply_robustness_checks(baselines):
     """
-    Aplica validaciones de robustez.
-    
-    Args:
-        baselines: DataFrame con baselines
-    
-    Returns:
-        DataFrame validado
+    Aplica verificaciones de robustez y pisos mínimos de variabilidad.
     """
     baselines = baselines.copy()
     
-    # Flag de baja confianza
+    # Flag de baja confianza (menos de MIN_OBSERVATIONS)
     baselines['low_confidence'] = baselines['count_obs'] < config.MIN_OBSERVATIONS
     
-    # Ajustar std muy bajas
+    # Ajustar desviaciones estándar mínimas
     if config.USE_DYNAMIC_MIN_STD:
-        baselines['min_std_threshold'] = baselines['mean_price_std'] * config.DYNAMIC_MIN_STD_PERCENT
+        baselines['min_std_threshold'] = (baselines['mean_price_std'] * config.DYNAMIC_MIN_STD_PERCENT).clip(lower=5.0)
         baselines['std_price_std'] = baselines.apply(
             lambda row: max(row['std_price_std'], row['min_std_threshold']) if pd.notna(row['std_price_std']) else row['min_std_threshold'],
             axis=1
@@ -761,284 +649,290 @@ def apply_robustness_checks(baselines):
             lambda x: max(x, config.MIN_STD_PRICE) if pd.notna(x) else config.MIN_STD_PRICE
         )
     
-    # Rellenar NaN
     baselines['std_price_std'] = baselines['std_price_std'].fillna(config.MIN_STD_PRICE)
     baselines = baselines.dropna(subset=['mean_price_std'])
     
     low_conf_count = baselines['low_confidence'].sum()
-    logging.info(f"Validaciones aplicadas. Baselines finales: {len(baselines):,}")
-    logging.warning(f"  Contextos con baja confianza: {low_conf_count:,} ({low_conf_count/len(baselines)*100:.1f}%)")
-    logging.debug(f"  MIN_OBSERVATIONS usado: {config.MIN_OBSERVATIONS}")
+    logging.info(f"✓ Validaciones aplicadas. Baselines finales: {len(baselines):,}")
+    logging.info(f"  Alta confianza: {(~baselines['low_confidence']).sum():,} ({100*(~baselines['low_confidence']).mean():.1f}%)")
     
     return baselines
 
 
 # ========================================
-# PRICE DISTRIBUTION & BUCKET CLASSIFICATION
-# ========================================
-
-def calculate_price_distribution_by_destination(df):
-    """
-    Calcula distribución de precios estandarizados por destino.
-    
-    Args:
-        df: DataFrame con columnas:
-            - destination_final
-            - destination_name
-            - avg_price_average_std (precio estandarizado)
-    
-    Returns:
-        DataFrame con percentiles por destino
-    """
-    logging.info("=" * 60)
-    logging.info("CALCULANDO DISTRIBUCIÓN DE PRECIOS POR DESTINO")
-    logging.info("=" * 60)
-    
-    # Validar columna necesaria
-    if 'avg_price_average_std' not in df.columns:
-        raise ValueError("Falta columna 'avg_price_average_std'. Ejecutar standardize_prices primero.")
-    
-    # Agrupar por destino y calcular percentiles (optimizado con quantile)
-    grouped = df.groupby(['destination_final', 'destination_name'])['avg_price_average_std']
-    
-    # Calcular todo en una sola pasada
-    price_dist = grouped.agg(['count', 'min', 'mean', 'max']).reset_index()
-    price_dist.columns = ['destination_final', 'destination_name', 'n_observations', 'min_price', 'mean_price', 'max_price']
-    
-    # Calcular percentiles (más rápido que múltiples quantile separados)
-    percentiles_df = grouped.quantile([0.10, 0.25, 0.50, 0.75, 0.90]).unstack()
-    percentiles_df.columns = ['p10', 'p25', 'p50', 'p75', 'p90']
-    percentiles_df = percentiles_df.reset_index()
-    
-    # Merge de los dos resultados
-    price_dist = price_dist.merge(percentiles_df, on=['destination_final', 'destination_name'])
-    
-    # Logging detallado
-    logging.info(f"✓ Distribuciones calculadas para {len(price_dist)} destinos")
-    logging.info(f"  Rango global de precios: ${price_dist['min_price'].min():.2f} - ${price_dist['max_price'].max():.2f}")
-    logging.info(f"  Mediana global: ${price_dist['p50'].median():.2f}")
-    
-    # Mostrar top 5 destinos más caros
-    top5 = price_dist.nlargest(5, 'p50')[['destination_name', 'p50']]
-    logging.debug("  Top 5 destinos más caros (mediana):")
-    for _, row in top5.iterrows():
-        logging.debug(f"    {row['destination_name']:30s}: ${row['p50']:.2f}")
-    
-    return price_dist
-
-
-def classify_observations_into_buckets(df, price_dist):
-    """
-    Clasifica cada observación en bucket de precio (low/medium/high).
-    Versión optimizada con operaciones numpy.
-    
-    Args:
-        df: DataFrame con observaciones históricas
-        price_dist: DataFrame con percentiles por destino
-    
-    Returns:
-        DataFrame con columna 'price_bucket'
-    """
-    logging.info("=" * 60)
-    logging.info("CLASIFICANDO OBSERVACIONES EN BUCKETS")
-    logging.info("=" * 60)
-    
-    # Merge con thresholds (copy=False para evitar copia innecesaria)
-    df = df.merge(
-        price_dist[['destination_final', 'p25', 'p50', 'p75']],
-        on='destination_final',
-        how='left',
-        copy=False
-    )
-    
-    # Usar numpy arrays para clasificación (más rápido)
-    price = df['avg_price_average_std'].values
-    p25 = df['p25'].values
-    p75 = df['p75'].values
-    p50 = df['p50'].values
-    
-    # Inicializar con medium por defecto
-    bucket = np.full(len(df), 'medium', dtype='object')
-    
-    # Máscaras booleanas
-    valid = ~(np.isnan(price) | np.isnan(p25) | np.isnan(p75))
-    bucket[valid & (price <= p25)] = 'low'
-    bucket[valid & (price >= p75)] = 'high'
-    bucket[~valid] = np.nan
-    
-    df['price_bucket'] = bucket
-    
-    # Calcular RPI vectorizado
-    df['relative_price_index'] = np.where(p50 > 0, price / p50, np.nan)
-    
-    # Limpiar columnas temporales
-    df.drop(columns=['p25', 'p50', 'p75'], inplace=True)
-    
-    # Estadísticas
-    total = len(df)
-    unique_buckets, counts = np.unique(bucket[~pd.isna(bucket)], return_counts=True)
-    
-    logging.info(f"✓ Clasificación completada: {total:,} observaciones")
-    logging.info(f"  Distribución de buckets:")
-    for b, c in zip(unique_buckets, counts):
-        pct = (c / total * 100) if total > 0 else 0
-        logging.info(f"    {b:8s}: {c:8,} ({pct:5.1f}%)")
-    
-    # Remover observaciones sin bucket
-    df_filtered = df[df['price_bucket'].notna()].copy()
-    removed = len(df) - len(df_filtered)
-    if removed > 0:
-        logging.info(f"  Removidas {removed:,} observaciones sin bucket")
-    
-    return df_filtered
-
-
-def generate_bucket_summary(baselines):
-    """
-    Genera resumen de cobertura de buckets.
-    
-    Args:
-        baselines: DataFrame con baselines por bucket
-    
-    Returns:
-        DataFrame con resumen de cobertura
-    """
-    if 'price_bucket' not in baselines.columns:
-        logging.warning("No hay columna price_bucket, saltando bucket_summary")
-        return None
-    
-    summary = baselines.groupby(['destination_final', 'destination_name', 'price_bucket']).agg(
-        n_contexts=('mean_price_std', 'count'),
-        total_observations=('count_obs', 'sum'),
-        avg_observations_per_context=('count_obs', 'mean'),
-        high_confidence_pct=('low_confidence', lambda x: (~x).sum() / len(x) * 100 if len(x) > 0 else 0)
-    ).reset_index()
-    
-    logging.info(f"✓ Bucket summary generado: {len(summary)} entradas")
-    
-    return summary
-
-
-# ========================================
-# DEAL SCORING
+# DEAL SCORING & CLASSIFICATION
 # ========================================
 
 def calculate_relative_score(hotel_price_std, mean_price_std, std_price_std):
-    """
-    Calcula z-score.
-    
-    Args:
-        hotel_price_std: Precio del hotel
-        mean_price_std: Media del baseline
-        std_price_std: Desv. estándar del baseline
-    
-    Returns:
-        float: Z-score
-    """
+    """Calcula Z-Score con salvaguarda contra división por cero."""
     if std_price_std == 0 or pd.isna(std_price_std):
-        std_price_std = mean_price_std * 0.10
-    
+        std_price_std = max(mean_price_std * 0.10, 5.0)
     return (hotel_price_std - mean_price_std) / std_price_std
 
 
 def classify_deal(z_score):
-    """
-    Clasifica precio según z-score.
-    
-    Args:
-        z_score: Relative score
-    
-    Returns:
-        str: Clasificación
-    """
+    """Clasifica el precio según su Z-score."""
     if pd.isna(z_score):
-        return config.CLASSIFICATION_LABELS['insufficient_data']
+        return config.CLASSIFICATION_LABELS.get('insufficient_data', 'Insufficient Data')
     
     if z_score < config.THRESHOLDS['deal']:
-        return config.CLASSIFICATION_LABELS['deal']
+        return config.CLASSIFICATION_LABELS.get('deal', 'Deal')
     elif z_score < config.THRESHOLDS['good_price']:
-        return config.CLASSIFICATION_LABELS['good_price']
+        return config.CLASSIFICATION_LABELS.get('good_price', 'Good Price')
     elif z_score <= config.THRESHOLDS['normal_upper']:
-        return config.CLASSIFICATION_LABELS['normal']
+        return config.CLASSIFICATION_LABELS.get('normal', 'Normal Price')
     else:
-        return config.CLASSIFICATION_LABELS['expensive']
+        return config.CLASSIFICATION_LABELS.get('expensive', 'Expensive')
 
 
 def is_deal(z_score):
-    """Retorna True si es deal."""
-    return z_score < config.THRESHOLDS['deal'] if not pd.isna(z_score) else False
+    """Retorna True si clasifica como deal."""
+    return bool(z_score < config.THRESHOLDS['deal']) if not pd.isna(z_score) else False
 
 
 def calculate_percentile(z_score):
-    """Calcula percentil asumiendo distribución normal."""
-    return stats.norm.cdf(z_score) * 100 if not pd.isna(z_score) else None
+    """Calcula percentil bajo distribución normal."""
+    return float(stats.norm.cdf(z_score) * 100) if not pd.isna(z_score) else None
 
 
 def get_baseline_for_context(baselines, destination, month, week_in_month):
-    """
-    Busca baseline para un contexto específico.
-    
-    Args:
-        baselines: DataFrame con baselines
-        destination, month, week_in_month: Contexto
-    
-    Returns:
-        dict o None
-    """
+    """Busca baseline para un contexto específico."""
+    dest_str = str(destination).rstrip('.0') if str(destination).endswith('.0') else str(destination)
+    dest_col = baselines['destination_final'].astype(str).str.replace(r'\.0$', '', regex=True)
     result = baselines[
-        (baselines['destination_final'] == destination) &
+        (dest_col == dest_str) &
         (baselines['month'] == month) &
         (baselines['week_in_month'] == week_in_month)
     ]
-    
     return result.iloc[0].to_dict() if len(result) > 0 else None
 
 
 # ========================================
-# SAVE/LOAD
+# HIERARCHICAL FALLBACK EVALUATION
+# ========================================
+
+def evaluate_hotel_price(destination_final, month, week_in_month, price_std, baselines_df):
+    """
+    Evalúa precio contra baselines aplicando búsqueda jerárquica con fallback para máxima confiabilidad.
+    """
+    dest_str = str(destination_final).rstrip('.0') if str(destination_final).endswith('.0') else str(destination_final)
+    dest_col = baselines_df['destination_final'].astype(str).str.replace(r'\.0$', '', regex=True)
+    
+    # 1. Búsqueda exacta: destino + mes + semana
+    subset = baselines_df[
+        (dest_col == dest_str) &
+        (baselines_df['month'] == month) &
+        (baselines_df['week_in_month'] == week_in_month)
+    ]
+    
+    fallback_level = 'exact'
+    
+    # 2. Fallback mensual: destino + mes
+    if subset.empty:
+        subset = baselines_df[
+            (dest_col == dest_str) &
+            (baselines_df['month'] == month)
+        ]
+        fallback_level = 'month'
+        
+    # 3. Fallback anual: destino general
+    if subset.empty:
+        subset = baselines_df[dest_col == dest_str]
+        fallback_level = 'destination_overall'
+    
+    if subset.empty:
+        return {
+            'classification': config.CLASSIFICATION_LABELS.get('insufficient_data', 'Sin datos'),
+            'z_score': None,
+            'baseline_info': None,
+            'confidence': 'low',
+            'used_fallback': True,
+            'fallback_level': 'none'
+        }
+    
+    baseline = subset.iloc[0]
+    mean_val = float(baseline['mean_price_std'])
+    std_val = float(baseline['std_price_std'])
+    if std_val == 0 or pd.isna(std_val):
+        std_val = max(mean_val * 0.10, 5.0)
+        
+    z_score = (price_std - mean_val) / std_val
+    classification = classify_deal(z_score)
+    
+    confidence = 'high' if (not baseline.get('low_confidence', False) and fallback_level == 'exact') else ('medium' if fallback_level != 'destination_overall' else 'low')
+    
+    return {
+        'classification': classification,
+        'z_score': float(z_score),
+        'baseline_info': {
+            'mean': mean_val,
+            'std': std_val,
+            'count': int(baseline.get('count_obs', 0))
+        },
+        'confidence': confidence,
+        'used_fallback': (fallback_level != 'exact'),
+        'fallback_level': fallback_level
+    }
+
+
+def evaluate_hotel_with_bucket_classification(destination_final, month, week_in_month, 
+                                               price_std, baselines_df, price_dist_df=None,
+                                               enable_buckets=None):
+    """
+    Evaluación de precio hotelero consciente de categoría/bucket con cascada de fallbacks jerárquicos.
+    """
+    if enable_buckets is None:
+        enable_buckets = config.ENABLE_PRICE_BUCKETS
+    
+    if not enable_buckets or price_dist_df is None or 'price_bucket' not in baselines_df.columns:
+        result = evaluate_hotel_price(destination_final, month, week_in_month, price_std, baselines_df)
+        result['is_deal'] = is_deal(result['z_score'])
+        result['price_bucket'] = None
+        result['relative_price_index'] = None
+        result['market_percentiles'] = None
+        return result
+    
+    # 1. Determinar percentiles y bucket del hotel
+    dest_str = str(destination_final)
+    dest_dist = price_dist_df[price_dist_df['destination_final'].astype(str) == dest_str]
+    
+    if dest_dist.empty:
+        # Fallback a evaluación no-bucket
+        result = evaluate_hotel_price(destination_final, month, week_in_month, price_std, baselines_df)
+        result['is_deal'] = is_deal(result['z_score'])
+        result['price_bucket'] = None
+        result['relative_price_index'] = None
+        result['market_percentiles'] = None
+        result['message'] = f"No hay distribución previa para {destination_final}"
+        return result
+    
+    dist = dest_dist.iloc[0]
+    p25, p50, p75 = float(dist['p25']), float(dist['p50']), float(dist['p75'])
+    
+    if price_std <= p25:
+        price_bucket = 'low'
+    elif price_std < p75:
+        price_bucket = 'medium'
+    else:
+        price_bucket = 'high'
+        
+    rel_index = price_std / p50 if p50 > 0 else np.nan
+    
+    # 2. Cascada jerárquica de baselines por bucket:
+    dest_col = baselines_df['destination_final'].astype(str)
+    
+    # Nivel 1: Exacto (destino + mes + semana + bucket)
+    subset = baselines_df[
+        (dest_col == dest_str) &
+        (baselines_df['month'] == month) &
+        (baselines_df['week_in_month'] == week_in_month) &
+        (baselines_df['price_bucket'] == price_bucket)
+    ]
+    fallback_level = 'exact'
+    
+    # Nivel 2: Destino + mes + bucket
+    if subset.empty:
+        subset = baselines_df[
+            (dest_col == dest_str) &
+            (baselines_df['month'] == month) &
+            (baselines_df['price_bucket'] == price_bucket)
+        ]
+        fallback_level = 'month_bucket'
+        
+    # Nivel 3: Destino + bucket general
+    if subset.empty:
+        subset = baselines_df[
+            (dest_col == dest_str) &
+            (baselines_df['price_bucket'] == price_bucket)
+        ]
+        fallback_level = 'destination_bucket'
+        
+    # Nivel 4: Destino + mes + semana (cualquier bucket)
+    if subset.empty:
+        subset = baselines_df[
+            (dest_col == dest_str) &
+            (baselines_df['month'] == month) &
+            (baselines_df['week_in_month'] == week_in_month)
+        ]
+        fallback_level = 'context_no_bucket'
+        
+    # Nivel 5: Destino general
+    if subset.empty:
+        subset = baselines_df[dest_col == dest_str]
+        fallback_level = 'destination_overall'
+        
+    if subset.empty:
+        return {
+            'classification': config.CLASSIFICATION_LABELS.get('insufficient_data', 'Insufficient Data'),
+            'is_deal': False,
+            'z_score': None,
+            'price_bucket': price_bucket,
+            'relative_price_index': float(rel_index) if pd.notna(rel_index) else None,
+            'market_percentiles': {'p25': p25, 'p50': p50, 'p75': p75},
+            'baseline_info': None,
+            'confidence': 'low',
+            'used_fallback': True,
+            'fallback_level': 'none'
+        }
+        
+    baseline = subset.iloc[0]
+    mean_val = float(baseline['mean_price_std'])
+    std_val = float(baseline['std_price_std'])
+    if std_val == 0 or pd.isna(std_val):
+        std_val = max(mean_val * 0.10, 5.0)
+        
+    z_score = (price_std - mean_val) / std_val
+    classification = classify_deal(z_score)
+    
+    confidence = 'high' if (not baseline.get('low_confidence', False) and fallback_level == 'exact') else ('medium' if fallback_level in ['month_bucket', 'destination_bucket'] else 'low')
+    
+    return {
+        'classification': classification,
+        'is_deal': is_deal(z_score),
+        'z_score': float(z_score),
+        'price_bucket': price_bucket,
+        'relative_price_index': float(rel_index) if pd.notna(rel_index) else None,
+        'market_percentiles': {'p25': p25, 'p50': p50, 'p75': p75},
+        'baseline_info': {
+            'mean': mean_val,
+            'std': std_val,
+            'count': int(baseline.get('count_obs', 0)),
+            'bucket': price_bucket
+        },
+        'confidence': confidence,
+        'used_fallback': (fallback_level != 'exact'),
+        'fallback_level': fallback_level
+    }
+
+
+# ========================================
+# SAVE & LOAD
 # ========================================
 
 def save_baselines(baselines, output_path=None):
-    """
-    Guarda baselines en CSV.
-    
-    Args:
-        baselines: DataFrame
-        output_path: Path de salida (default: config.BASELINES_FILE)
-    """
+    """Guarda baselines en archivo CSV."""
     if output_path is None:
         output_path = config.BASELINES_FILE
-    
     output_path = Path(output_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    
     baselines.to_csv(output_path, index=False)
-    logging.info(f"Baselines guardados: {output_path}")
-    logging.debug(f"  Tamaño: {output_path.stat().st_size / 1024:.1f} KB")
-    logging.debug(f"  Registros: {len(baselines):,}")
+    logging.info(f"✓ Baselines guardados en: {output_path} ({len(baselines):,} registros)")
 
 
 def load_baselines(baselines_path=None):
-    """
-    Carga baselines desde CSV.
-    
-    Args:
-        baselines_path: Path (default: config.BASELINES_FILE)
-    
-    Returns:
-        DataFrame
-    """
+    """Carga baselines desde archivo CSV."""
     if baselines_path is None:
         baselines_path = config.BASELINES_FILE
-    
     baselines_path = Path(baselines_path)
-    
     if not baselines_path.exists():
-        raise FileNotFoundError(f"Baselines no encontrado: {baselines_path}")
+        # Fallback a outputs/baselines.csv si existe
+        alt_path = config.OUTPUT_DIR / "baselines.csv"
+        if alt_path.exists():
+            baselines_path = alt_path
+        else:
+            raise FileNotFoundError(f"Baselines no encontrado en {baselines_path} ni en {alt_path}")
     
-    baselines = pd.read_csv(baselines_path)
-    logging.info(f"Baselines cargados: {len(baselines):,} contextos")
-    logging.debug(f"  Destinos: {baselines['destination_final'].nunique()}")
-    logging.debug(f"  Alta confianza: {(~baselines['low_confidence']).sum():,}")
-    
+    baselines = pd.read_csv(baselines_path, dtype={'destination_final': str}, low_memory=False)
+    baselines['destination_final'] = baselines['destination_final'].astype(str).str.replace(r'\.0$', '', regex=True)
+    logging.info(f"✓ Baselines cargados: {len(baselines):,} contextos desde {baselines_path.name}")
     return baselines

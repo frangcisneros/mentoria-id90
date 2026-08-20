@@ -101,7 +101,7 @@ def load_price_distribution_cached():
     
     try:
         if config.PRICE_DISTRIBUTION_FILE.exists():
-            price_dist = pd.read_csv(config.PRICE_DISTRIBUTION_FILE)
+            price_dist = pd.read_csv(config.PRICE_DISTRIBUTION_FILE, dtype={'destination_final': str}, low_memory=False)
             return price_dist
         else:
             return None

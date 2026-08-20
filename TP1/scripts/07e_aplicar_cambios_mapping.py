@@ -66,29 +66,24 @@ coord_destinos = mapping_df.groupby('nearest_destination_id').agg(
 precio_ciudades = df_hist.groupby('city')['price_std'].mean().to_dict()
 
 # Destinos problemáticos y sus reasignaciones manuales basadas en el análisis
-# Formato: {ciudad_actual: (destino_actual, nuevo_destino)}
+# Formato: {reference: (destino_actual, nuevo_destino)}
 CAMBIOS = {
-    # Anaheim & Buena Park
-    'Azusa': ('Anaheim & Buena Park', 'Redondo Beach'),
-    'Bell Gardens': ('Anaheim & Buena Park', 'Long Beach'),
-    'Arcadia': ('Anaheim & Buena Park', 'Los Angeles'),
-    # San Juan Islands
-    'Bellingham': ('San Juan Islands', 'Seattle'),
-    'Anacortes': ('San Juan Islands', 'Astoria'),
-    # Detroit
-    'Ann Arbor': ('Detroit', 'Columbus'),
-    # Seattle
-    'Arlington': ('Seattle', 'Cambridge'),
+    # Anaheim & Buena Park (California)
+    'US - CA - Azusa': ('Anaheim & Buena Park', 'Los Angeles'),
+    'US - CA - Bell Gardens': ('Anaheim & Buena Park', 'Long Beach'),
+    'US - CA - Arcadia': ('Anaheim & Buena Park', 'Los Angeles'),
+    # San Juan Islands (Washington)
+    'US - WA - Bellingham': ('San Juan Islands', 'Seattle'),
 }
 
 # Verificar que los cambios son válidos
 print('\nVerificando cambios...')
 cambios_validos = []
-for ciudad, (dest_actual, dest_nuevo) in CAMBIOS.items():
-    # Verificar que la ciudad existe en el mapping
-    mask = mapping_df['city'] == ciudad
+for ref, (dest_actual, dest_nuevo) in CAMBIOS.items():
+    # Verificar que la referencia existe en el mapping
+    mask = mapping_df['reference'] == ref
     if not mask.any():
-        print(f'  ⚠ {ciudad} no encontrada en mapping')
+        print(f'  ⚠ {ref} no encontrada en mapping')
         continue
     
     # Verificar que el destino nuevo existe
@@ -99,6 +94,7 @@ for ciudad, (dest_actual, dest_nuevo) in CAMBIOS.items():
     # Verificar cercanía
     ciudad_info = mapping_df[mask].iloc[0]
     c_lat, c_lon = ciudad_info['latitude'], ciudad_info['longitude']
+    ciudad = ciudad_info['city']
     
     dest_nuevo_info = coord_destinos[coord_destinos['nombre'] == dest_nuevo]
     if dest_nuevo_info.empty:
@@ -116,21 +112,22 @@ for ciudad, (dest_actual, dest_nuevo) in CAMBIOS.items():
     diff_precio = abs(precio_ciudad - precio_dest)
     
     if dist > 500:
-        print(f'  ⚠ {ciudad} → {dest_nuevo}: demasiado lejos ({dist:.0f}km)')
+        print(f'  ⚠ {ref} → {dest_nuevo}: demasiado lejos ({dist:.0f}km)')
         continue
     
     if diff_precio > 30:
-        print(f'  ⚠ {ciudad} → {dest_nuevo}: precio muy distinto (${diff_precio:.0f} diff)')
+        print(f'  ⚠ {ref} → {dest_nuevo}: precio muy distinto (${diff_precio:.0f} diff)')
         continue
     
     cambios_validos.append({
+        'reference': ref,
         'city': ciudad,
         'destino_actual': dest_actual,
         'destino_nuevo': dest_nuevo,
         'dist_km': dist,
         'diff_precio': diff_precio
     })
-    print(f'  ✓ {ciudad}: {dest_actual} → {dest_nuevo} ({dist:.0f}km, ${diff_precio:.0f} diff)')
+    print(f'  ✓ {ref} ({ciudad}): {dest_actual} → {dest_nuevo} ({dist:.0f}km, ${diff_precio:.0f} diff)')
 
 if not cambios_validos:
     print('\nNo hay cambios válidos para aplicar.')
@@ -141,8 +138,7 @@ print(f'\nAplicando {len(cambios_validos)} cambios al mapping...')
 mapping_nuevo = mapping_df.copy()
 
 for cambio in cambios_validos:
-    mask = mapping_nuevo['city'] == cambio['city']
-    new_dest = mapping_nuevo.loc[mask, 'nearest_destination_name'].values[0]
+    mask = mapping_nuevo['reference'] == cambio['reference']
     
     # Actualizar nearest_destination_name
     mapping_nuevo.loc[mask, 'nearest_destination_name'] = cambio['destino_nuevo']
@@ -152,7 +148,7 @@ for cambio in cambios_validos:
     if len(nuevo_id) > 0:
         mapping_nuevo.loc[mask, 'nearest_destination_id'] = nuevo_id[0]
     
-    print(f'  ✓ {cambio["city"]}: {cambio["destino_actual"]} → {cambio["destino_nuevo"]}')
+    print(f'  ✓ {cambio["reference"]}: {cambio["destino_actual"]} → {cambio["destino_nuevo"]}')
 
 # Guardar backup del original
 backup_path = Path(__file__).resolve().parent.parent.parent / 'data' / 'destination_with_nearest_backup.csv'

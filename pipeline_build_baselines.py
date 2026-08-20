@@ -37,44 +37,65 @@ def main():
     # 2.5 Validar datos (filtrar erróneos)
     logging.info("[2.5/11] Validando datos...")
     df_valid = auxiliary_functions.validate_data(df_raw)
+    del df_raw
     
-    # 3. Estandarizar precios
-    logging.info("[3/11] Estandarizando precios...")
-    df_std = auxiliary_functions.standardize_prices(df_valid)
-    
-    # 4. Expandir fechas
-    logging.info("[4/11] Expandiendo fechas...")
-    df_expanded = auxiliary_functions.expand_dates_dataframe(df_std)
-    
-    # 5. Agregar features temporales
-    logging.info("[5/11] Generando features temporales...")
-    df_features = auxiliary_functions.add_temporal_features(df_expanded)
-    
-    # 6. Mapear destinaciones
-    logging.info("[6/11] Mapeando destinaciones...")
+    # 3. Mapear destinaciones (sobre 5.15M registros antes de expandir para optimizar RAM)
+    logging.info("[3/11] Mapeando destinaciones...")
     mapping_df = auxiliary_functions.load_destination_mapping()
-    df_mapped = auxiliary_functions.apply_destination_mapping(df_features, mapping_df)
+    df_mapped = auxiliary_functions.apply_destination_mapping(df_valid, mapping_df)
+    del df_valid
     
-    # 7. NUEVO: Calcular distribución de precios por destino
+    # 4. Estandarizar precios
+    logging.info("[4/11] Estandarizando precios...")
+    df_std = auxiliary_functions.standardize_prices(df_mapped)
+    del df_mapped
+    
+    # 5. Calcular distribución de precios y clasificar en buckets (sobre búsquedas únicas)
     if config.ENABLE_PRICE_BUCKETS:
-        logging.info("[7/11] Calculando distribución de precios por destino...")
-        price_dist = auxiliary_functions.calculate_price_distribution_by_destination(df_mapped)
+        logging.info("[5/11] Calculando distribución de precios por destino...")
+        price_dist = auxiliary_functions.calculate_price_distribution_by_destination(df_std)
         
         # Guardar distribución
         price_dist.to_csv(config.PRICE_DISTRIBUTION_FILE, index=False)
         logging.info(f"✓ Distribución guardada en: {config.PRICE_DISTRIBUTION_FILE}")
         
-        # 8. NUEVO: Clasificar en buckets
-        logging.info("[8/11] Clasificando observaciones en buckets de precio...")
-        df_bucketed = auxiliary_functions.classify_observations_into_buckets(df_mapped, price_dist)
+        # Clasificar en buckets
+        logging.info("[6/11] Clasificando observaciones en buckets de precio...")
+        df_bucketed = auxiliary_functions.classify_observations_into_buckets(df_std, price_dist)
+        del df_std
     else:
-        logging.info("[7-8/11] Saltando distribución y clasificación de buckets (deshabilitado)")
-        df_bucketed = df_mapped
+        logging.info("[5-6/11] Saltando distribución y clasificación de buckets (deshabilitado)")
+        df_bucketed = df_std
         price_dist = None
     
+    # 7. Expandir fechas a observaciones diarias (solo columnas necesarias para baselines)
+    logging.info("[7/11] Expandiendo fechas a observaciones diarias...")
+    cols_to_keep = [
+        'destination_final', 'destination_name', 'date_start', 'date_end',
+        'avg_price_average_std', 'count_repeated'
+    ]
+    if 'price_bucket' in df_bucketed.columns:
+        cols_to_keep.append('price_bucket')
+    if 'min_price_low_std' in df_bucketed.columns:
+        cols_to_keep.append('min_price_low_std')
+    if 'max_price_high_std' in df_bucketed.columns:
+        cols_to_keep.append('max_price_high_std')
+        
+    df_compact = df_bucketed[cols_to_keep].copy()
+    del df_bucketed
+    
+    df_expanded = auxiliary_functions.expand_dates_dataframe(df_compact)
+    del df_compact
+    
+    # 8. Agregar features temporales
+    logging.info("[8/11] Generando features temporales...")
+    df_features = auxiliary_functions.add_temporal_features(df_expanded)
+    del df_expanded
+    
     # 9. Calcular baselines (con o sin buckets según configuración)
-    logging.info("[9/11] Calculando baselines...")
-    baselines = auxiliary_functions.calculate_baselines(df_bucketed)
+    logging.info("[9/11] Calculando baselines con estadísticas ponderadas...")
+    baselines = auxiliary_functions.calculate_baselines(df_features)
+    del df_features
     
     # 10. Validar baselines
     logging.info("[10/11] Aplicando validaciones de robustez...")
