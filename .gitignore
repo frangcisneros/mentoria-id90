@@ -21,8 +21,10 @@ data/*.sqlite3
 data/historicals_*.csv
 data/datos_historicos_*.csv
 data/price_historicals/*.csv
+**/datos_historicos_*.csv
 outputs/
-TP1/outputs/
+**/outputs/
+**/outputs_*/
 *.backup
 
 # IDE
