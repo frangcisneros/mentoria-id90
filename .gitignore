@@ -54,3 +54,6 @@ app_old.py
 # Residual local files
 README.md.backup
 Test.ipynb
+
+# Marimo local artifacts (cache de datos y sesión)
+**/__marimo__/

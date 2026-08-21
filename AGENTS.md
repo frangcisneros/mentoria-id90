@@ -4,85 +4,72 @@
 
 Python project for detecting hotel price deals using statistical z-score analysis on historical search data from ID90Travel. Part of DiploDatos 2026 mentorship.
 
-## Critical Setup
+## Active Work Area
 
-Data files (~200MB/year) are **not in the repo**. Download from Google Drive before running anything:
+**`TP1_corregido/` is the current working package** (corrected TP1 per instructor feedback — see its `INFORME_CORRECCIONES_TP1.md`). Root-level files are the older app/pipeline.
+
+The working notebook is **`TP1_corregido/tp1_exploracion_marimo.py`** (marimo format). Per owner decision, all new analysis work goes there — `TP1_exploracion_mercado.ipynb` is legacy reference only.
+
+## Environment (this machine)
+
+- **No conda.** System Python 3.14 + user packages in `~/.local`. marimo lives at `~/.local/bin/marimo` (export PATH if missing).
+- `requirements.txt` pins are **stale** vs the installed env (installed: pandas 3.x, numpy 2.x). Don't blindly `pip install -r`; check what's already installed first.
+
+## Data Files
+
+Not in the repo (gitignored). Required before running anything:
 ```
-data/datos_historicos_2024.csv
+data/datos_historicos_2024.csv   # ~2.5M records
 data/datos_historicos_2025.csv
+data/hotel_data.db               # SQLite built by database.py from the CSVs
 ```
-`data/destination_with_nearest.csv` IS in the repo (with manual corrections applied).
+`data/destination_with_nearest.csv` IS in the repo (manual corrections applied); `destination_with_nearest_backup.csv` is the pre-correction backup.
 
 ## Commands
 
 ```bash
-# Environment setup
-conda create -n hotels python=3.11 && conda activate hotels
-pip install -r requirements.txt
-
 # Generate baselines (required before app/tests)
 python pipeline_build_baselines.py
 
-# Run web app
+# Web app
 streamlit run app.py
 
-# Run tests (requires baselines to exist first)
-pytest test_system.py -v
+# Tests (need outputs/*.csv baselines first) — currently 23/23 passing
+python3 -m pytest test_system.py -q
+
+# Open the working analysis notebook
+marimo edit TP1_corregido/tp1_exploracion_marimo.py
+
+# Execute the whole marimo notebook headless (~50s, runs all cells)
+MPLBACKEND=Agg marimo export html TP1_corregido/tp1_exploracion_marimo.py -o out.html
 ```
 
-## Pipeline Order
+⚠️ `marimo export script` does **not** execute cells — it only flattens code. Use `export html` to actually run the notebook headless.
 
-1. `pipeline_build_baselines.py` generates `outputs/*.csv` files
-2. `app.py` reads those outputs at startup
-3. Tests in `test_system.py` also depend on generated baselines
+## Marimo Notebook Rules
 
-**Never run `app.py` or tests without first generating baselines.**
+- Reactivity: a variable must be defined in exactly one cell. `_`-prefixed names are cell-local (safe to reuse).
+- After editing, verify conflicts: `python3 scripts/tmp/diag_reactividad_marimo.py TP1_corregido/tp1_exploracion_marimo.py`
+- Do NOT wrap the data-loading cell in `mo.persistent_cache` — it silently fails to save with these multi-GB DataFrames (investigated and abandoned; see marimo `_save/hash.py` if ever retried).
+- Run marimo from the repo root: the notebook inserts the first directory containing `config.py` into sys.path. From root that resolves to the root pair (`auxiliary_functions.py`, `data/`); from inside `TP1_corregido/` it resolves to the duplicated pair there and falls back to the 300k sample dataset because `TP1_corregido/data/` has no historical CSVs.
 
-## TP1 Scripts (Exploration & Validation)
+## Legacy TP1 Scripts
 
-Located in `TP1/scripts/`, numbered for sequential execution:
-```bash
-cd TP1/scripts
-for i in 01 02 03 04 05 06 07 08; do python3 ${i}_*.py; done
-```
-
-Outputs go to `TP1/outputs/` (data/, images/, maps/).
-
-Key scripts:
-- `07_validacion_mapping.py` — scores mapping quality (CV + correlation)
-- `07e_aplicar_cambios_mapping.py` — applies mapping corrections with documented criteria
+`TP1/scripts/01..08_*.py` run sequentially; outputs go to `TP1/outputs/`. Superseded by the marimo notebook but kept for provenance. `07_validacion_mapping.py` scores mapping quality; `07e_aplicar_cambios_mapping.py` applies the manual corrections listed below.
 
 ## Key Architecture
 
-- **3-stage pipeline**: data extraction → baseline generation → web app
-- **Price standardization**: `price / (nights * rooms * (adults + kids))` — price per room-night-person
-- **Baselines**: statistical summaries grouped by `destination_final × month × week_in_month × price_bucket`
-- **Buckets**: price tiers (budget/mid-range/premium) within each destination, controlled by `ENABLE_PRICE_BUCKETS` flag in `config.py`
-- **Classification**: z-score thresholds in `config.py:THRESHOLDS` (deal < -1.0, good_price < -0.5, normal_upper > 0.5)
+- **3-stage pipeline**: data extraction → baseline generation (`pipeline_build_baselines.py` → `outputs/*.csv`) → web app (`app.py` reads those outputs at startup). Never run app/tests without baselines.
+- **Price standardization**: `price / (nights * rooms * (adults + kids))` — price per room-night-person. Column `price_std`.
+- **Temporal expansion**: each booking becomes exactly `nights` rows (check-in + 0..nights-1); checkout day is NOT a paid night. Uses `nights` column, never `(date_end - date_start) + 1`.
+- **Baselines**: weighted by `count_repeated` (search demand weight). Three explicit units: `demand_weight` = sum of count_repeated, `n_records` = row count, `count_obs` = alias of demand_weight (backcompat). Confidence threshold: ≥30 demand-weighted units per context.
+- **Buckets**: price tiers within destination, controlled by `ENABLE_PRICE_BUCKETS` in `config.py`.
+- **Classification**: z-score thresholds in `config.py:THRESHOLDS` (deal < -1.0, good_price < -0.5, normal_upper > 0.5).
 
 ## Destination Mapping
 
-`data/destination_with_nearest.csv` maps ~26k raw city names to canonical destinations by geographic proximity. Manual corrections have been applied:
-- Azusa, Bell Gardens, Arcadia → reassigned from Anaheim to nearby destinations
-- Bellingham, Anacortes → reassigned from San Juan Islands
-- Ann Arbor → reassigned from Detroit to Columbus
-
-Mapping validation script (`07_validacion_mapping.py`) uses composite score combining CV (price variability) and correlation (seasonal pattern alignment).
-
-## Test Issues
-
-`test_system.py` has discrepancies with current code:
-- Calls `calcular_total_std` but function is `calculate_price_std`
-- Expects Spanish labels ("Buen Precio") but config uses English ("Good Price")
-- Tests will fail until fixed
+`data/destination_with_nearest.csv` maps ~26k raw city names to canonical destinations by geographic proximity. Manual corrections applied (documented criteria): Azusa→Redondo Beach, Bell Gardens→Long Beach, Arcadia→Los Angeles, Bellingham→Seattle, Anacortes→Astoria, Ann Arbor→Columbus, Arlington→Cambridge. ~35% of records remain unmapped (kept as raw city, never auto-assigned).
 
 ## Config Location
 
-All thresholds, paths, and feature flags live in `config.py`. Check there first when debugging classification behavior.
-
-## Data Notes
-
-- `outputs/` directory is gitignored — must be regenerated locally
-- ~40% of records lack destination mapping (fallback to raw city name)
-- Historical data covers 2024-2025, ~2.5M records per year
-- `data/destination_with_nearest_backup.csv` exists as backup of original mapping
+All thresholds, paths, and feature flags live in `config.py` (root for the app; `TP1_corregido/config.py` is the corrected copy used by the marimo notebook when run from that directory). Check there first when debugging classification behavior.
