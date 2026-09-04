@@ -1,116 +1,94 @@
-# TP1 Corregido — Exploración de Mercado y Homogeneidad de Precios
-## Diplomatura en Ciencia de Datos · Mentoría ID90Travel
+# Hotel Deals Detection & Market Analysis
 
-Este directorio contiene la **versión corregida** de la entrega de TP1, aplicando las devoluciones del docente sobre:
+**Diplomatura en Ciencia de Datos · Mentoría ID90Travel 2026**
 
-- Unidad de análisis y expansión temporal.
-- Etiquetado de días de semana.
-- Cobertura y trazabilidad del mapping de destinos.
-- Separación de `demand_weight`, `n_records` y `count_obs`.
-- Política explícita de outliers.
-- SNR acompañado de soporte de datos.
-
-Ver `reporte_final.md` para la síntesis ejecutiva y `INFORME_CORRECCIONES_TP1.md` para el detalle técnico completo.
+Sistema de detección de ofertas de precios hoteleros basado en análisis estadístico (Z-Score y percentiles) sobre búsquedas históricas de la plataforma ID90Travel.
 
 ---
 
-## Estructura del paquete de entrega
+## Estructura del Repositorio
 
 ```text
-TP1_corregido/
-├── TP1_exploracion_mercado.ipynb       # Notebook corregido
-├── auxiliary_functions.py              # Funciones corregidas (mapping, expansión, baselines)
-├── config.py                           # Configuración actualizada
-├── pipeline_build_baselines.py         # Pipeline corregido
-├── database.py                         # Utilitario SQLite
-├── requirements.txt                    # Dependencias
-├── README.md                           # Esta guía
-├── reporte_final.md                    # Síntesis ejecutiva
-├── INFORME_CORRECCIONES_TP1.md         # Informe técnico de correcciones
-├── scripts/
-│   └── destination_mapping_preprocess.py  # Script de referencia del docente
+mentoria-id90/
+├── app.py                         # Aplicación interactiva en Streamlit para clasificar ofertas
+├── auxiliary_functions.py         # Biblioteca de funciones de curación, mapping y baselines
+├── config.py                      # Configuración global de umbrales, rutas y esquemas
+├── pipeline_build_baselines.py    # Pipeline ETL que genera los baselines estadísticos
+├── database.py                    # Gestor de base de datos SQLite para búsquedas
+├── test_system.py                 # Suite de tests del sistema
 │
-├── data/                               # Symlinks o archivos de datos
-│   ├── destination_with_nearest.csv
-│   ├── destination_with_nearest_backup.csv
-│   ├── datos_historicos_2024.csv
-│   ├── datos_historicos_2025.csv
-│   └── sample_data_300k.csv.gz
+├── TP1_corregido/                 # Paquete de entrega TP1 (versión corregida)
+│   ├── TP1_exploracion_mercado.ipynb  # Notebook Jupyter interactivo
+│   ├── TP1_exploracion_mercado.py     # Script Jupytext sincronizado (py:percent)
+│   ├── INFORME_CORRECCIONES_TP1.md    # Devolución docente y correcciones aplicadas
+│   ├── reporte_final.md               # Síntesis ejecutiva de la definición de mercado
+│   ├── README.md                      # Documentación del TP1
+│   └── logs/                          # Logs de ejecución del pipeline de baselines
 │
-└── outputs/                            # Baselines generados por el pipeline
-    ├── market_baselines.csv
-    ├── price_distribution.csv
-    └── bucket_summary.csv
+├── TP2/                           # Paquete de entrega TP2 (Curación y Mercado)
+│   ├── TP2_curacion_mercado.ipynb     # Notebook Jupyter interactivo
+│   ├── TP2_curacion_mercado.py        # Script Jupytext sincronizado (py:percent)
+│   └── README.md                      # Documentación, consignas y conclusiones del TP2
+│
+├── TP1/                           # Scripts exploratorios iniciales de referencia (01..19)
+├── TP1_entrega/                   # Archivo histórico de la primera entrega de TP1
+├── data/                          # Mapeo de destinos (versionado) y CSVs históricos (gitignored)
+├── outputs/                       # Baselines generados por el pipeline (market_baselines.csv, etc.)
+└── scripts/                       # Utilidades generales (conversión a PDF, preprocesamiento)
 ```
 
 ---
 
-## Instalación y ejecución
+## Flujo de Trabajo con Jupytext
 
-### 1. Entorno virtual y dependencias
+Los notebooks principales de análisis (`TP1_corregido` y `TP2`) están estructurados con **Jupytext** en formato percent (`py:percent`), permitiendo editarlos tanto como scripts de Python con celdas (`# %%`) en VS Code / PyCharm como en Jupyter Lab / Notebook.
+
+### Sincronización automática
+Para sincronizar cambios entre el script `.py` y el notebook `.ipynb`:
 
 ```bash
-cd TP1_corregido
-python3.11 -m venv ../.venv
-source ../.venv/bin/activate
-pip install -r requirements.txt
-# requirements.txt no incluye scikit-learn, statsmodels ni jupyter, que el notebook sí necesita
-pip install scikit-learn statsmodels jupyter
+# Sincronizar TP1
+jupytext --sync TP1_corregido/TP1_exploracion_mercado.ipynb
+
+# Sincronizar TP2
+jupytext --sync TP2/TP2_curacion_mercado.ipynb
 ```
 
-### 2. Datos
+### Ejecución directa desde consola
+```bash
+python TP2/TP2_curacion_mercado.py
+```
 
-Los archivos `datos_historicos_2024.csv` y `datos_historicos_2025.csv` deben estar en `data/`. En el repo raíz ya existen; si no están, descargarlos del Google Drive de la materia.
+---
 
-### 3. Ejecutar el pipeline completo
+## Pipeline y Aplicación Web
+
+### 1. Generación de Baselines
+Antes de ejecutar la aplicación Streamlit o los tests, es necesario generar los baselines de mercado:
 
 ```bash
 python pipeline_build_baselines.py
 ```
+Esto genera los archivos en `outputs/`:
+- `market_baselines.csv`
+- `price_distribution.csv`
+- `bucket_summary.csv`
 
-Esto genera los baselines en `outputs/` usando ambos años completos (2024 + 2025).
-
-### 4. Ejecutar el notebook
-
+### 2. Aplicación Streamlit
 ```bash
-jupyter notebook TP1_exploracion_mercado.ipynb
+streamlit run app.py
 ```
-
-> **Nota:** las conclusiones finales deben basarse en los outputs del pipeline completo, no en la muestra de 300.000 filas.
 
 ---
 
-## Resultados principales (versión corregida)
+## Definición de Mercado
 
-| Métrica | Valor |
-|---|---|
-| Filas originales (2024 + 2025) | 5,158,190 |
-| Filas con mapeo canónico | 69,0% |
-| Demanda mapeada | 80,5% |
-| Contextos generados | 673.030 |
-| Contextos de alta confianza (N≥30) | 157.705 (23,4%) |
-| Demanda en contextos de alta confianza | 96,3% |
+Tras las evaluaciones de homogeneidad y cobertura del TP1 y TP2, la segmentación adoptada es:
 
-### Segmentación propuesta
+$$\\text{Contexto} = \\text{destination\\_final} \\times \\text{month} \\times \\text{week\\_in\\_month} \\times \\text{stay\\_duration}$$
 
-```text
-Contexto = destination_final × month × week_in_month × stay_duration
-```
-
-`price_bucket` es opcional. Es un proxy de categoría hotelera porque no tenemos estrellas, amenities ni marca.
-
-### Principales correcciones respecto al TP1 original
-
-1. **Expansión temporal:** ahora se generan exactamente `nights` noches pagadas, sin incluir el checkout.
-2. **Días de semana:** corregido el diccionario (`0 = Lunes`, ..., `6 = Domingo`).
-3. **Mapping:** integrado el pretratamiento del docente con `match_level` para auditar cada match.
-4. **Unidad de análisis:** separadas `demand_weight` (suma de `count_repeated`), `n_records` (filas/noches) y `count_obs`.
-5. **Outliers:** política explícita con filtro de precios negativos y winsorización al percentil 99.9.
-6. **SNR:** reportado junto con soporte de datos (% de demanda en contextos confiables).
-
----
-
-## Documentación adicional
-
-- `reporte_final.md` — Síntesis ejecutiva de resultados.
-- `INFORME_CORRECCIONES_TP1.md` — Detalle técnico de cada corrección y comparación original vs corregido.
+- **`destination_final`**: Destino canónico consolidado mediante `destination_with_nearest.csv`.
+- **`month`**: Mes de check-in (1 a 12).
+- **`week_in_month`**: Semana del mes (1 a 4).
+- **`stay_duration`**: Estadía corta (1-2 noches), media (3-5 noches) o larga (>5 noches).
+- **Umbral de confianza**: $\\ge 30$ unidades de demanda ponderada (`count_repeated`).

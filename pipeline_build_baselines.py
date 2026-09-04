@@ -71,8 +71,8 @@ def main():
     # 7. Expandir fechas a observaciones diarias (solo columnas necesarias para baselines)
     logging.info("[7/11] Expandiendo fechas a observaciones diarias...")
     cols_to_keep = [
-        'destination_final', 'destination_name', 'date_start', 'date_end',
-        'avg_price_average_std', 'count_repeated'
+        'destination_final', 'destination_name', 'date_start', 'date_end', 'nights',
+        'avg_price_average_std', 'count_repeated', 'match_level'
     ]
     if 'price_bucket' in df_bucketed.columns:
         cols_to_keep.append('price_bucket')

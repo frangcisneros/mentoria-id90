@@ -55,5 +55,3 @@ app_old.py
 README.md.backup
 Test.ipynb
 
-# Marimo local artifacts (cache de datos y sesión)
-**/__marimo__/

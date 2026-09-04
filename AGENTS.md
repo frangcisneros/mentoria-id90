@@ -6,24 +6,40 @@ Python project for detecting hotel price deals using statistical z-score analysi
 
 ## Active Work Area
 
-**`TP1_corregido/` is the current working package** (corrected TP1 per instructor feedback — see its `INFORME_CORRECCIONES_TP1.md`). Root-level files are the older app/pipeline.
+- **`TP2/`**: TP2 package (`TP2_curacion_mercado.ipynb` + Jupytext twin). It imports `config` and `auxiliary_functions` from the **repo root** — it has no local copies, so editing root modules changes TP2, the pipeline, and the app at once.
+- **`TP1_corregido/`**: corrected TP1 package with its OWN `config.py` / `auxiliary_functions.py` copies.
+- **`TP1_entrega/`** and `TP1_entrega.zip`: frozen first-delivery archive. Do not edit.
+- **`TP2_entrega/`**: self-contained TP2 deliverable (notebook with fresh outputs, root `config.py`/`auxiliary_functions.py` copies, `data/` sample + mapping, own README/requirements). Frozen once graded. Verified runnable from a clean venv (`scratch/venv_tp2_pkg`).
+- Repo root: Streamlit app (`app.py`), baseline pipeline, shared `config.py` / `auxiliary_functions.py` / `test_system.py`.
 
-The working notebook is **`TP1_corregido/tp1_exploracion_marimo.py`** (marimo format). Per owner decision, all new analysis work goes there — `TP1_exploracion_mercado.ipynb` is legacy reference only.
+## Notebooks (Jupytext)
+
+The `.py` (py:percent) is the canonical source; the `.ipynb` is regenerated from it — never edit the `.ipynb` directly.
+
+```bash
+jupytext --sync TP1_corregido/TP1_exploracion_mercado.ipynb
+jupytext --sync TP2/TP2_curacion_mercado.ipynb
+python TP2/TP2_curacion_mercado.py   # standalone run (MPLBACKEND=agg outside Jupyter)
+```
 
 ## Environment (this machine)
 
-- **No conda.** System Python 3.14 + user packages in `~/.local`. marimo lives at `~/.local/bin/marimo` (export PATH if missing).
-- `requirements.txt` pins are **stale** vs the installed env (installed: pandas 3.x, numpy 2.x). Don't blindly `pip install -r`; check what's already installed first.
+- **No conda.** System Python 3.14 (`/usr/bin/python`) + user packages in `~/.local`. Jupytext at `~/.local/bin/jupytext`.
+- A `.venv` (Python 3.11) exists but is NOT the canonical env — do not activate it.
+- `pytest` is not installed in either env; install it before running `test_system.py`.
+- `requirements.txt` pins may lag the installed env.
 
 ## Data Files
 
-Not in the repo (gitignored). Required before running anything:
+Gitignored (required for full runs):
 ```
 data/datos_historicos_2024.csv   # ~2.5M records
-data/datos_historicos_2025.csv
+data/datos_historicos_2025.csv   # ~2.6M (5.1M total)
 data/hotel_data.db               # SQLite built by database.py from the CSVs
 ```
-`data/destination_with_nearest.csv` IS in the repo (manual corrections applied); `destination_with_nearest_backup.csv` is the pre-correction backup.
+Tracked in the repo: `data/sample_data_300k.csv.gz` (random 300k sample, seed=42 — default input for the TP1/TP2 notebooks) and `data/destination_with_nearest.csv` (manual corrections applied; `_backup.csv` is the pre-correction original).
+
+Notebooks run on the 300k sample by default; `USE_FULL_HISTORICALS=1` switches TP2 to the full historicals.
 
 ## Commands
 
@@ -34,28 +50,15 @@ python pipeline_build_baselines.py
 # Web app
 streamlit run app.py
 
-# Tests (need outputs/*.csv baselines first) — currently 23/23 passing
-python3 -m pytest test_system.py -q
-
-# Open the working analysis notebook
-marimo edit TP1_corregido/tp1_exploracion_marimo.py
-
-# Execute the whole marimo notebook headless (~50s, runs all cells)
-MPLBACKEND=Agg marimo export html TP1_corregido/tp1_exploracion_marimo.py -o out.html
+# Tests (needs pytest installed + baselines present)
+python test_system.py
 ```
 
-⚠️ `marimo export script` does **not** execute cells — it only flattens code. Use `export html` to actually run the notebook headless.
-
-## Marimo Notebook Rules
-
-- Reactivity: a variable must be defined in exactly one cell. `_`-prefixed names are cell-local (safe to reuse).
-- After editing, verify conflicts: `python3 scripts/tmp/diag_reactividad_marimo.py TP1_corregido/tp1_exploracion_marimo.py`
-- Do NOT wrap the data-loading cell in `mo.persistent_cache` — it silently fails to save with these multi-GB DataFrames (investigated and abandoned; see marimo `_save/hash.py` if ever retried).
-- Run marimo from the repo root: the notebook inserts the first directory containing `config.py` into sys.path. From root that resolves to the root pair (`auxiliary_functions.py`, `data/`); from inside `TP1_corregido/` it resolves to the duplicated pair there and falls back to the 300k sample dataset because `TP1_corregido/data/` has no historical CSVs.
+`load_baselines()` reads `outputs/market_baselines.csv` and falls back to `outputs/baselines.csv`. The Dockerfile packages only the Streamlit app (python:3.10-slim, port 8501); `data/` must be mounted in.
 
 ## Legacy TP1 Scripts
 
-`TP1/scripts/01..08_*.py` run sequentially; outputs go to `TP1/outputs/`. Superseded by the marimo notebook but kept for provenance. `07_validacion_mapping.py` scores mapping quality; `07e_aplicar_cambios_mapping.py` applies the manual corrections listed below.
+`TP1/scripts/01..19_*.py` run sequentially; outputs go to `TP1/outputs/`. Superseded by the TP1 notebook but kept for provenance. `07_validacion_mapping.py` scores mapping quality; `07e_aplicar_cambios_mapping.py` applies the manual corrections listed below.
 
 ## Key Architecture
 
@@ -63,13 +66,16 @@ MPLBACKEND=Agg marimo export html TP1_corregido/tp1_exploracion_marimo.py -o out
 - **Price standardization**: `price / (nights * rooms * (adults + kids))` — price per room-night-person. Column `price_std`.
 - **Temporal expansion**: each booking becomes exactly `nights` rows (check-in + 0..nights-1); checkout day is NOT a paid night. Uses `nights` column, never `(date_end - date_start) + 1`.
 - **Baselines**: weighted by `count_repeated` (search demand weight). Three explicit units: `demand_weight` = sum of count_repeated, `n_records` = row count, `count_obs` = alias of demand_weight (backcompat). Confidence threshold: ≥30 demand-weighted units per context.
-- **Buckets**: price tiers within destination, controlled by `ENABLE_PRICE_BUCKETS` in `config.py`.
-- **Classification**: z-score thresholds in `config.py:THRESHOLDS` (deal < -1.0, good_price < -0.5, normal_upper > 0.5).
+- **Weighted vs unweighted stats**: production baselines (`auxiliary_functions.calculate_baselines`) are demand-weighted; the TP2 notebook computes its exploratory stats unweighted. Do not mix the two when comparing numbers.
+- **Market definition (adopted in TP2)**: `destination_final × month × week_in_month × stay_duration` (corta 1-2n, media 3-5n, larga >5n). On the 300k sample it keeps 77% of demand in cells with N ≥ 30.
+- **Detector adopted for TP3**: `is_deal = (z_log < -1.0) AND (1 - price_std/market_median >= 0.20)`, where `z_log` is the z-score of `ln(price_std)` within the market. Evaluated only in markets with N ≥ 30 (percentiles collapse in 1-2 record cells); sparser cells use the fallback cascade: exact week → full month → destination overall.
+- **Buckets**: price tiers within destination (p25/p75 of `price_std`), controlled by `ENABLE_PRICE_BUCKETS` in `config.py`.
+- **Classification**: z-score thresholds in `config.py:THRESHOLDS` (deal < -1.0, good_price < -0.5, expensive > 0.5).
 
 ## Destination Mapping
 
-`data/destination_with_nearest.csv` maps ~26k raw city names to canonical destinations by geographic proximity. Manual corrections applied (documented criteria): Azusa→Redondo Beach, Bell Gardens→Long Beach, Arcadia→Los Angeles, Bellingham→Seattle, Anacortes→Astoria, Ann Arbor→Columbus, Arlington→Cambridge. ~35% of records remain unmapped (kept as raw city, never auto-assigned).
+`data/destination_with_nearest.csv` maps ~26k raw city names to canonical destinations by geographic proximity. Manual corrections applied (documented criteria): Azusa→Redondo Beach, Bell Gardens→Long Beach, Arcadia→Los Angeles, Bellingham→Seattle, Anacortes→Astoria, Ann Arbor→Columbus, Arlington→Cambridge. Unmapped rows keep the raw city (never auto-assigned): on the 300k sample ~30% of rows / ~18% of demand.
 
 ## Config Location
 
-All thresholds, paths, and feature flags live in `config.py` (root for the app; `TP1_corregido/config.py` is the corrected copy used by the marimo notebook when run from that directory). Check there first when debugging classification behavior.
+All thresholds, paths, and feature flags live in `config.py` (root — used by app, pipeline, tests, and TP2; `TP1_corregido/config.py` is the TP1 package's own copy). Check there first when debugging classification behavior.
