@@ -6,10 +6,8 @@ Python project for detecting hotel price deals using statistical z-score analysi
 
 ## Active Work Area
 
-- **`TP2/`**: TP2 package (`TP2_curacion_mercado.ipynb` + Jupytext twin). It imports `config` and `auxiliary_functions` from the **repo root** — it has no local copies, so editing root modules changes TP2, the pipeline, and the app at once.
-- **`TP1_corregido/`**: corrected TP1 package with its OWN `config.py` / `auxiliary_functions.py` copies.
-- **`TP1_entrega/`** and `TP1_entrega.zip`: frozen first-delivery archive. Do not edit.
-- **`TP2_entrega/`**: self-contained TP2 deliverable (notebook with fresh outputs, root `config.py`/`auxiliary_functions.py` copies, `data/` sample + mapping, own README/requirements). Frozen once graded. Verified runnable from a clean venv (`scratch/venv_tp2_pkg`).
+- **`TP2_entrega/`** and `TP2_entrega.zip`: self-contained final TP2 deliverable (notebook with fresh outputs, local `config.py`/`auxiliary_functions.py` copies, `data/` sample + mapping, `reporte_final.md`, `INFORME_CORRECCIONES_TP1.md`, own README/requirements).
+- **`TP1_entrega_corregida/`** and `TP1_entrega_corregida.zip`: self-contained final corrected TP1 deliverable (notebook with fresh outputs, local `config.py`/`auxiliary_functions.py`, `data/` sample + mapping, `reporte_final.md`, `INFORME_CORRECCIONES_TP1.md`, own README/requirements).
 - Repo root: Streamlit app (`app.py`), baseline pipeline, shared `config.py` / `auxiliary_functions.py` / `test_system.py`.
 
 ## Notebooks (Jupytext)
@@ -17,16 +15,16 @@ Python project for detecting hotel price deals using statistical z-score analysi
 The `.py` (py:percent) is the canonical source; the `.ipynb` is regenerated from it — never edit the `.ipynb` directly.
 
 ```bash
-jupytext --sync TP1_corregido/TP1_exploracion_mercado.ipynb
-jupytext --sync TP2/TP2_curacion_mercado.ipynb
-python TP2/TP2_curacion_mercado.py   # standalone run (MPLBACKEND=agg outside Jupyter)
+jupytext --sync TP1_entrega_corregida/TP1_exploracion_mercado.ipynb
+jupytext --sync TP2_entrega/TP2_curacion_mercado.ipynb
+python TP2_entrega/TP2_curacion_mercado.py   # standalone run (MPLBACKEND=agg outside Jupyter)
 ```
 
 ## Environment (this machine)
 
 - **No conda.** System Python 3.14 (`/usr/bin/python`) + user packages in `~/.local`. Jupytext at `~/.local/bin/jupytext`.
 - A `.venv` (Python 3.11) exists but is NOT the canonical env — do not activate it.
-- `pytest` is not installed in either env; install it before running `test_system.py`.
+- `pytest` (8.4.2) is installed in system Python 3.14 (`python test_system.py` runs cleanly).
 - `requirements.txt` pins may lag the installed env.
 
 ## Data Files

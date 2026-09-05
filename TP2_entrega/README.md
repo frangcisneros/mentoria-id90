@@ -36,7 +36,7 @@ $$\mathbf{\text{Mercado}} = \mathbf{\text{destination\_final} \times \text{month
 - **Mes**: aisla la estacionalidad climática y los picos de vacaciones (enero/julio/diciembre).
 - **Semana del mes**: captura quincenas de cobro y fines de semana largos.
 - **Duración de estadía**: las cadenas aplican descuentos por volumen; comparar 1 noche contra 14 distorsiona el precio diario.
-- **Masa estadística verificada**: de 119.253 combinaciones posibles, las celdas densas ($N \ge 30$) concentran 1.67 millones de búsquedas, el 77.0% del volumen.
+- **Masa estadística y sensibilidad**: bajo demanda ponderada (`demand_weight ≥ 30`), las celdas confiables concentran el **77.0%** del volumen (10.974 mercados). Bajo búsquedas independientes sin ponderar (`n_records ≥ 30`), la cobertura cae al **16.8%** (544 mercados), ratificando la centralidad de la cascada de rescate jerárquico para TP3.
 
 ---
 
@@ -88,15 +88,15 @@ $$\mathbf{\text{Mercado}} = \mathbf{\text{destination\_final} \times \text{month
 
 ---
 
-## 5. Decisión final
+## 5. Criterio de detección adoptado para TP3
 
 El detector adoptado (ground truth del TP3):
 
 $$\mathbf{\text{is\_deal}} = (z_{\log} < -1.0) \;\land\; \left(1 - \frac{\text{price\_std}}{\text{mediana}_{\text{contexto}}} \ge 0.20\right)$$
 
-### Por qué:
+### Fundamentación técnica:
 
-1. **Frente al Z-Score Gaussiano del docente:**
+1. **Frente al Z-Score Gaussiano lineal de referencia:**
    En Las Vegas o Cancún, hoteles de $800 inflan $\sigma$ y una tarifa de $25 da $z = -0.87$: la oferta se pierde. En logaritmo la dispersión se mide en proporciones y el sesgo desaparece: detecta 60% más ofertas (14.2% contra 8.9%) al mismo precio medio.
 2. **Frente al Percentil 10:**
    El percentil fuerza una cuota fija en cualquier destino, incluso en plazas de tarifas planas donde no hay ninguna oportunidad real.
@@ -114,13 +114,15 @@ $$\mathbf{\text{is\_deal}} = (z_{\log} < -1.0) \;\land\; \left(1 - \frac{\text{p
 
 | Archivo | Rol |
 |---|---|
+| `reporte_final.md` | Síntesis ejecutiva de TP2 y cierre corregido de TP1 (SNR, métricas y decisiones). |
+| `INFORME_CORRECCIONES_TP1.md` | Informe detallado de correcciones metodológicas de TP1 tras devolución docente. |
 | `TP2_curacion_mercado.ipynb` | Notebook ejecutable: código, salidas, gráficos y tablas (ya ejecutado). |
 | `TP2_curacion_mercado.py` | Gemelo Jupytext (`py:percent`), sincronizado con el `.ipynb`. |
 | `config.py` | Umbrales, rutas y reglas del análisis. |
 | `auxiliary_functions.py` | Funciones de curación, mapping y estadísticos. |
 | `data/sample_data_300k.csv.gz` | Muestra aleatoria de 300.000 búsquedas (seed=42). |
 | `data/destination_with_nearest.csv` | Mapping de ciudades crudas a destinos canónicos. |
-| `README.md` | Este informe. |
+| `README.md` | Este informe técnico general. |
 
 ---
 

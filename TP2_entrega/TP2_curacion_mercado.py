@@ -32,9 +32,9 @@
 # 2. [Auditoría de calidad, limpieza y precio estándar](#2-auditoría-de-calidad-limpieza-y-precio-estándar)
 # 3. [Variables de contexto temporal y duración](#3-variables-de-contexto-temporal-y-duración)
 # 4. [Mapping geográfico y categoría de hotel (`price_bucket`)](#4-mapping-geográfico-y-categoría-de-hotel-price_bucket)
-# 5. [La decisión central: definición de mercado y masa crítica](#5-la-decisión-central-definición-de-mercado-y-masa-crítica)
+# 5. [Definición de mercado y masa estadística](#5-definición-de-mercado-y-masa-estadística)
 # 6. [Distribución de precios dentro de cada mercado](#6-distribución-de-precios-dentro-de-cada-mercado)
-# 7. [Comparativa de estadísticos: evaluando alternativas de detección](#7-comparativa-de-estadísticos-evaluando-alternativas-de-detección)
+# 7. [Comparación de estadísticos de detección de ofertas](#7-comparación-de-estadísticos-de-detección-de-ofertas)
 # 8. [Decisiones metodológicas para el TP3](#8-decisiones-metodológicas-para-el-tp3)
 
 # %%
@@ -62,7 +62,7 @@ sns.set_theme(style="whitegrid")
 plt.rcParams["figure.figsize"] = (12, 5)
 plt.rcParams["font.size"] = 10
 
-print(f"Directorio raíz: {ROOT_DIR}")
+print("Entorno inicializado correctamente (módulos config y auxiliary_functions cargados).")
 
 # %% [markdown]
 # ## 1. Carga de datos y entorno
@@ -271,9 +271,9 @@ b_summary["precio_medio_usd"] = b_summary["categoría_hotel"].map(
 print(b_summary.to_string(index=False))
 
 # %% [markdown]
-# ## 5. La decisión central: definición de mercado y masa crítica
+# ## 5. Definición de mercado y masa estadística
 #
-# Antes de comparar precios hay que definir el mercado comparable y verificar que tenga masa estadística para estimar medias y desvíos.
+# Antes de comparar precios es necesario definir la unidad de mercado comparable y evaluar la representatividad muestral por contexto.
 #
 # ### Definición de mercado adoptada
 #
@@ -281,12 +281,12 @@ print(b_summary.to_string(index=False))
 #
 # ### Justificación
 #
-# 1. **¿Por qué este nivel de detalle?**
+# 1. **Nivel de granularidad:**
 #    - Aisla la estacionalidad (`month`), la quincena (`week_in_month`) y el descuento por volumen de las estadías largas (`stay_duration`).
-# 2. **¿Por qué no bajar a día exacto u hotel?**
-#    - Fragmentaría la muestra en miles de celdas con 1 o 2 búsquedas, donde no hay media ni desvío estimables.
-# 3. **¿Cómo se verifica la masa estadística?**
-#    - Con el umbral $N \ge 30$ observaciones ponderadas por celda: se mide cuánta demanda total queda dentro de celdas confiables.
+# 2. **Riesgo de sobresegmentación:**
+#    - Una granularidad a nivel día exacto u hotel fragmentaría la muestra en celdas con 1 o 2 observaciones, impidiendo estimar varianzas muestrales.
+# 3. **Criterio de masa estadística y unidades de reporte:**
+#    - Siguiendo la devolución docente, se reportan dos cantidades: `demand_weight` (suma de `count_repeated`) y `n_records` (búsquedas únicas sin ponderar). Se evalúa la sensibilidad de exigir $N \ge 30$ bajo ambos criterios.
 #
 # Los estadísticos por mercado de esta exploración se calculan sin ponderar; los baselines de producción (`pipeline_build_baselines.py`) ponderan media y desvío por `count_repeated`.
 
@@ -317,15 +317,33 @@ tp2_contexts = tp2_base.merge(p_df, on=context_cols)
 tp2_contexts["q_lo"] = tp2_contexts["p25"] - 1.5 * (tp2_contexts["p75"] - tp2_contexts["p25"])
 
 total_ctx = len(tp2_contexts)
-solid_ctx = (tp2_contexts["demand_weight"] >= 30).sum()
+solid_dw_ctx = (tp2_contexts["demand_weight"] >= 30).sum()
 total_dem = tp2_contexts["demand_weight"].sum()
-solid_dem = tp2_contexts.loc[tp2_contexts["demand_weight"] >= 30, "demand_weight"].sum()
+solid_dw_dem = tp2_contexts.loc[tp2_contexts["demand_weight"] >= 30, "demand_weight"].sum()
 
-print("Auditoría de densidad de la definición de mercado:")
+solid_nr_ctx = (tp2_contexts["n_records"] >= 30).sum()
+solid_nr_dem = tp2_contexts.loc[tp2_contexts["n_records"] >= 30, "demand_weight"].sum()
+
+densidad_df = pd.DataFrame({
+    "criterio_confianza": [
+        "demand_weight >= 30 (búsquedas ponderadas)",
+        "n_records >= 30 (búsquedas únicas sin ponderar)"
+    ],
+    "mercados_solidos": [solid_dw_ctx, solid_nr_ctx],
+    "pct_mercados": [
+        100.0 * solid_dw_ctx / total_ctx,
+        100.0 * solid_nr_ctx / total_ctx
+    ],
+    "pct_demanda_cubierta": [
+        100.0 * solid_dw_dem / total_dem,
+        100.0 * solid_nr_dem / total_dem
+    ]
+})
+
+print("Auditoría de densidad y representatividad muestral por mercado:")
 print(f"  Total de mercados formados: {total_ctx:,}")
-print(f"  Mercados con demanda >= 30: {solid_ctx:,} ({100.0 * solid_ctx / total_ctx:.1f}%)")
-print(f"  Demanda total: {total_dem:,.0f} búsquedas")
-print(f"  Demanda en mercados confiables (N >= 30): {solid_dem:,.0f} ({100.0 * solid_dem / total_dem:.1f}%)")
+print(f"  Demanda total ponderada: {total_dem:,.0f} búsquedas\n")
+print(densidad_df.round(2).to_string(index=False))
 
 # Ejemplo concreto: top mercados en el destino más buscado
 top_dest_name = df.groupby("destination_name")["count_repeated"].sum().idxmax()
@@ -385,9 +403,9 @@ print("Distribución del Coeficiente de Variación (CV = std/mean) en mercados c
 print(cv_df[["mean_price", "std_price", "cv"]].describe().round(3).to_string())
 
 # %% [markdown]
-# ## 7. Comparativa de estadísticos: evaluando alternativas de detección
+# ## 7. Comparación de estadísticos de detección de ofertas
 #
-# Se contrasta la fórmula del docente contra cinco alternativas. La comparación se restringe a observaciones de **mercados con masa estadística ($N \ge 30$)**: con uno o dos registros los percentiles colapsan (si $IQR = 0$, la regla de Tukey marca el 100% de las filas) y los z-scores dependen de la salvaguarda, así que incluir esos mercados mediría ruido y no calidad de detección.
+# Se evalúa el Z-Score lineal propuesto inicialmente frente a métodos alternativos de detección. La comparación se restringe a observaciones de **mercados con masa estadística ($N \ge 30$)**: con uno o dos registros los percentiles colapsan (si $IQR = 0$, la regla de Tukey marca el 100% de las filas) y los z-scores dependen de la salvaguarda, por lo que incluir esos mercados mediría ruido y no calidad de detección.
 #
 # 1. **Enfoque del Docente — Z-Score Gaussiano ($z < -1.0$)**:
 #    $$z = \frac{\text{price\_std} - \mu_{\text{contexto}}}{\sigma_{\text{contexto}}}$$
@@ -546,9 +564,9 @@ plt.tight_layout()
 plt.show()
 
 # %% [markdown]
-# ### Balance comparativo: ¿por qué no quedarse solo con la fórmula lineal?
+# ### Comparación de detectores y limitaciones del modelo gaussiano
 #
-# Del contraste salen tres conclusiones:
+# Del análisis comparativo se derivan tres conclusiones:
 #
 # 1. **El Z-Score Gaussiano lineal subestima ofertas en plazas heterogéneas:**
 #    En destinos como Las Vegas, Miami o Cancún conviven hoteles económicos con resorts de más de 800 USD. Esa dispersión infla $\sigma$: una tarifa de 25 USD en un contexto con $\mu = 90$ y $\sigma = 75$ da $z = (25 - 90)/75 = -0.87$, apenas un "Good Price". La oferta se pierde.
