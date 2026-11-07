@@ -6,6 +6,7 @@ Python project for detecting hotel price deals using statistical z-score analysi
 
 ## Active Work Area
 
+- **`TP3_entrega/`** and `TP3_entrega.zip`: self-contained final TP3 deliverable (executed notebook with fresh outputs, local `config.py`/`auxiliary_functions.py`, `data/` sample + mapping + test dataset, `reporte_final.md`, `README.md`, `api.py` FastAPI service, `test_api.py`, `Dockerfile`, `requirements.txt`).
 - **`TP2_entrega/`** and `TP2_entrega.zip`: self-contained final TP2 deliverable (notebook with fresh outputs, local `config.py`/`auxiliary_functions.py` copies, `data/` sample + mapping, `reporte_final.md`, `INFORME_CORRECCIONES_TP1.md`, own README/requirements).
 - **`TP1_entrega_corregida/`** and `TP1_entrega_corregida.zip`: self-contained final corrected TP1 deliverable (notebook with fresh outputs, local `config.py`/`auxiliary_functions.py`, `data/` sample + mapping, `reporte_final.md`, `INFORME_CORRECCIONES_TP1.md`, own README/requirements).
 - Repo root: Streamlit app (`app.py`), baseline pipeline, shared `config.py` / `auxiliary_functions.py` / `test_system.py`.
