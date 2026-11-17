@@ -1,16 +1,23 @@
 # TP3 — Test suite para la API de Detección de Deals
 # Mentoría ID90Travel · Grupo 02
 
-import pytest
-from fastapi.testclient import TestClient
-import sys
+import importlib.util
 from pathlib import Path
 
-_current_dir = Path(__file__).resolve().parent
-if str(_current_dir) not in sys.path:
-    sys.path.insert(0, str(_current_dir))
+import pytest
+from fastapi.testclient import TestClient
 
-from api import app, init_engine
+_current_dir = Path(__file__).resolve().parent
+
+# Cargar api.py por ruta con un nombre propio y sin dejar esta carpeta en
+# sys.path: el módulo plano `api` de este entregable choca con el paquete
+# `api/` del TP4 cuando ambos corren en la misma sesión de pytest
+# ("No module named 'api.main'; 'api' is not a package").
+_spec = importlib.util.spec_from_file_location("tp3_api_under_test", _current_dir / "api.py")
+_api_module = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(_api_module)
+
+app, init_engine = _api_module.app, _api_module.init_engine
 
 # Inicializar motor antes de tests
 init_engine()

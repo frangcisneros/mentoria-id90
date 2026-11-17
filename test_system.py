@@ -193,17 +193,29 @@ class TestEvaluation:
     def test_evaluate_nyc_deal(self):
         """Test evaluación de un deal en NYC."""
         baselines = auxiliary_functions.load_baselines()
-        
-        # NYC (ID 687), Enero, Semana 2, precio bajo
+
+        # NYC (ID 687), Enero, Semana 2. El precio se deriva del baseline del
+        # propio contexto (40% de la media) para que el test no dependa del
+        # dataset con que se generaron los baselines (5,1 M completos vs muestra
+        # de 300k): antes estaba fijo en 75.0.
+        contexto = auxiliary_functions.evaluate_hotel_price(
+            destination_final='687',
+            month=1,
+            week_in_month=2,
+            price_std=0.0,
+            baselines_df=baselines
+        )
+        precio_bajo = contexto['baseline_info']['mean'] * 0.4
+
         result = auxiliary_functions.evaluate_hotel_price(
             destination_final='687',
             month=1,
             week_in_month=2,
-            price_std=75.0,  # Muy bajo
+            price_std=precio_bajo,
             baselines_df=baselines
         )
-        
-        assert result['classification'] in ['Deal', 'Good Price', 'Buen Precio', 'Normal']
+
+        assert result['classification'] in ['Deal', 'Good Price', 'Buen Precio', 'Normal Price']
         assert result['z_score'] is not None
     
     def test_evaluate_nyc_expensive(self):
