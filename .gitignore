@@ -55,3 +55,7 @@ app_old.py
 # Scratch directory
 scratch/
 
+
+*.pyc
+.pytest_cache/
+*.lnk
